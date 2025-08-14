@@ -1,0 +1,1155 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>面付けツール（プレビュー付き）</title>
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 / ReactDOM 18 / Babel Standalone (for JSX in browser) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="min-h-screen bg-slate-100">
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react,env">
+    const { useMemo, useRef, useEffect, useState } = React;
+
+    // --- Utilities ---------------------------------------------------------------
+    function measurePxPerMm() {
+      const probe = document.createElement("div");
+      probe.style.width = "1in"; // CSSの1インチ
+      probe.style.position = "absolute";
+      probe.style.visibility = "hidden";
+      document.body.appendChild(probe);
+      const cssPPI = probe.getBoundingClientRect().width;
+      document.body.removeChild(probe);
+      const pxPerMm = cssPPI / 25.4; // CSS px / mm
+      return Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 96 / 25.4;
+    }
+
+    // 面付け位置をカタマリにグループ化
+    function groupPositions(positions) {
+      if (positions.length === 0) return [];
+      const leftPositions = positions.filter(p => p.area === 'left');
+      const rightPositions = positions.filter(p => p.area === 'right');
+      const singlePositions = positions.filter(p => p.area === 'single');
+      const groups = [];
+      if (leftPositions.length > 0) groups.push(leftPositions);
+      if (rightPositions.length > 0) groups.push(rightPositions);
+      if (singlePositions.length > 0) groups.push(singlePositions);
+      return groups;
+    }
+
+    // カタマリの境界を計算（mm座標のまま）
+    function calculateGroupBounds(group, boundType = 'bleed') {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      group.forEach(pos => {
+        const rect = boundType === 'trim' ? pos.trim : pos.bleed;
+        const { x, y, w, h } = rect;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x + w);
+        maxY = Math.max(maxY, y + h);
+      });
+      return { minX, minY, maxX, maxY };
+    }
+
+    // 製品間の境界線を検出（mm座標のまま） - 0.001mmバケツでFP誤差回避
+    function findBoundaries(group) {
+      const boundaries = [];
+      const positions = group.map(p => p.trim);
+      if (positions.length <= 1) return boundaries;
+
+      // helper: quantize to 0.001mm buckets to avoid FP mismatches
+      const key = (mm) => Math.round(mm * 1000); // integer key
+
+      // ---- Vertical boundaries (shared left/right edges)
+      const vMap = new Map(); // key(x) -> { left: [], right: [] }
+      for (const pos of positions) {
+        const L = key(pos.x);
+        const R = key(pos.x + pos.w);
+        if (!vMap.has(L)) vMap.set(L, { left: [], right: [] });
+        if (!vMap.has(R)) vMap.set(R, { left: [], right: [] });
+        vMap.get(L).right.push(pos); // rectangles whose RIGHT edge is at x
+        vMap.get(R).left.push(pos);  // rectangles whose LEFT edge is at x
+      }
+      for (const [kx, lr] of vMap.entries()) {
+        if (lr.left.length > 0 && lr.right.length > 0) {
+          const all = lr.left.concat(lr.right);
+          const minY = Math.min(...all.map(p => p.y));
+          const maxY = Math.max(...all.map(p => p.y + p.h));
+          boundaries.push({ type: 'vertical', position: kx / 1000, start: minY, end: maxY });
+        }
+      }
+
+      // ---- Horizontal boundaries (shared top/bottom edges)
+      const hMap = new Map(); // key(y) -> { top: [], bottom: [] }
+      for (const pos of positions) {
+        const T = key(pos.y);
+        const B = key(pos.y + pos.h);
+        if (!hMap.has(T)) hMap.set(T, { top: [], bottom: [] });
+        if (!hMap.has(B)) hMap.set(B, { top: [], bottom: [] });
+        hMap.get(T).bottom.push(pos); // rectangles whose BOTTOM edge is at y
+        hMap.get(B).top.push(pos);    // rectangles whose TOP edge is at y
+      }
+      for (const [ky, tb] of hMap.entries()) {
+        if (tb.top.length > 0 && tb.bottom.length > 0) {
+          const all = tb.top.concat(tb.bottom);
+          const minX = Math.min(...all.map(p => p.x));
+          const maxX = Math.max(...all.map(p => p.x + p.w));
+          boundaries.push({ type: 'horizontal', position: ky / 1000, start: minX, end: maxX });
+        }
+      }
+
+      return boundaries;
+    }
+
+    // 製品の「列」と「行」から、隣り合う仕上がりの境目（シーム）を抽出（mm）
+    function computeSeams(group) {
+      const trims = group.map(p => p.trim);
+      const nMm = Math.abs(group[0].trim.x - group[0].bleed.x); // bleedEachSide
+
+      // 量子化キー（0.001mm）
+      const key = v => Math.round(v * 1000);
+
+      // ---- 行ごとに縦シーム（x）を集計：同じ行(y)でx順に並べ、連続ペアの右端= seamXStart
+      const rows = new Map(); // key(yTop) -> array of rects in that row
+      for (const r of trims) {
+        const ky = key(r.y);
+        if (!rows.has(ky)) rows.set(ky, []);
+        rows.get(ky).push(r);
+      }
+      const verticalStarts = [];
+      for (const arr of rows.values()) {
+        arr.sort((a,b) => a.x - b.x);
+        for (let i = 0; i < arr.length - 1; i++) {
+          const left = arr[i];
+          const right = arr[i+1];
+          // 右端（left.x + left.w）が縦シームの開始（trim-bleed-trim の "最初のtrim"）
+          verticalStarts.push(left.x + left.w);
+        }
+      }
+
+      // ---- 列ごとに横シーム（y）を集計：同じ列(x)でy順に並べ、連続ペアの下端= seamYStart
+      const cols = new Map(); // key(xLeft) -> array of rects in that col
+      for (const r of trims) {
+        const kx = key(r.x);
+        if (!cols.has(kx)) cols.set(kx, []);
+        cols.get(kx).push(r);
+      }
+      const horizontalStarts = [];
+      for (const arr of cols.values()) {
+        arr.sort((a,b) => a.y - b.y);
+        for (let i = 0; i < arr.length - 1; i++) {
+          const top = arr[i];
+          const bottom = arr[i+1];
+          horizontalStarts.push(top.y + top.h);
+        }
+      }
+
+      // 一意化（0.001mm）
+      const uniq = (vals) => {
+        const s = new Set();
+        const out = [];
+        for (const v of vals) {
+          const k = key(v);
+          if (s.has(k)) continue;
+          s.add(k);
+          out.push(v);
+        }
+        return out;
+      };
+
+      return {
+        nMm,
+        verticalStarts:   uniq(verticalStarts),
+        horizontalStarts: uniq(horizontalStarts),
+      };
+    }
+// 紙の目プレビュー（mm座標）
+// mode: "T" => 10mm間隔の水平線（上→下）
+//       "Y" => 10mm間隔の垂直線（左→右）
+function drawPaperGrain(ctx, paperW, paperH, mode) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(37, 99, 235, 0.2)"; // 薄い青・20%
+  ctx.lineWidth = 0.2; // mmの細線
+
+  if (mode === "T") {
+    for (let y = 0; y <= paperH; y += 10) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(paperW, y);
+      ctx.stroke();
+    }
+  } else { // "Y"
+    for (let x = 0; x <= paperW; x += 10) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, paperH);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+    // 日本式ダブルトンボ一式の描画 ------------------------------------------------
+    function drawRegistrationMarks(ctx, layout) {
+      ctx.save();
+      const TOMBO_LENGTH_MM = 12.7; // mm
+      const OUTSIDE_MM = 9;         // 外側へ常に 9mm
+      const MARK_LW_MM = 0.4;       // およそ 1.5px 相当
+
+      const { positions } = layout;
+      if (!positions.length) {
+        ctx.restore();
+        return;
+      }
+
+      const groups = groupPositions(positions);
+      const bleedEachSideMm = (layout.bleedW - layout.trimW) / 2;
+
+      ctx.lineWidth = MARK_LW_MM;
+      ctx.strokeStyle = '#111827';
+
+      for (const group of groups) {
+        drawJapaneseCornerMarks(ctx, group, TOMBO_LENGTH_MM, OUTSIDE_MM, bleedEachSideMm);
+        drawCenterMarks(ctx, group, TOMBO_LENGTH_MM);
+        drawPerimeterMarks(ctx, group, TOMBO_LENGTH_MM);
+        // ブルズアイ（十字＋円）マーク
+        drawBullseyeMarks(ctx, group, MARK_LW_MM);
+      }
+      ctx.restore();
+    }
+
+    function drawJapaneseCornerMarks(ctx, group, tomboLenMm, outMm, bleedEachSideMm) {
+      if (!group.length) return;
+      const t = calculateGroupBounds(group, 'trim');
+
+      // 仕上がり角(tx,ty)は mm のまま
+      drawJapaneseCornerMark(ctx, 'top-left',     t.minX, t.minY, bleedEachSideMm, outMm, tomboLenMm);
+      drawJapaneseCornerMark(ctx, 'top-right',    t.maxX, t.minY, bleedEachSideMm, outMm, tomboLenMm);
+      drawJapaneseCornerMark(ctx, 'bottom-left',  t.minX, t.maxY, bleedEachSideMm, outMm, tomboLenMm);
+      drawJapaneseCornerMark(ctx, 'bottom-right', t.maxX, t.maxY, bleedEachSideMm, outMm, tomboLenMm);
+    }
+
+    function drawJapaneseCornerMark(ctx, pos, tx, ty, nMm, outMm, tomboLenMm) {
+      const n = nMm, out = outMm;
+      ctx.lineCap = 'butt';
+
+      // 黒（仕上がり基準）
+      ctx.beginPath();
+      switch (pos) {
+        case 'top-left':
+          ctx.moveTo(tx - n - out, ty - n); ctx.lineTo(tx, ty - n);       // 横（左へ）
+          ctx.moveTo(tx, ty - n);          ctx.lineTo(tx, ty - n - out);  // 縦（上へ）
+          break;
+        case 'top-right':
+          ctx.moveTo(tx, ty - n);          ctx.lineTo(tx + n + out, ty - n);
+          ctx.moveTo(tx, ty - n);          ctx.lineTo(tx, ty - n - out);
+          break;
+        case 'bottom-left':
+          ctx.moveTo(tx - n - out, ty);    ctx.lineTo(tx - n, ty);
+          ctx.moveTo(tx - n, ty);          ctx.lineTo(tx - n, ty + n + out);
+          break;
+        case 'bottom-right':
+          ctx.moveTo(tx + n, ty);          ctx.lineTo(tx + n + out, ty);
+          ctx.moveTo(tx + n, ty);          ctx.lineTo(tx + n, ty + n + out);
+          break;
+      }
+      ctx.stroke();
+
+      // 赤（=断ち落とし基準だが色は黒指定に統一済み）
+      ctx.beginPath();
+      switch (pos) {
+        case 'top-left':
+          ctx.moveTo(tx - n - out, ty);    ctx.lineTo(tx - n, ty);
+          ctx.moveTo(tx - n, ty);          ctx.lineTo(tx - n, ty - (n + out));
+          break;
+        case 'top-right':
+          ctx.moveTo(tx + n, ty);          ctx.lineTo(tx + n + out, ty);
+          ctx.moveTo(tx + n, ty);          ctx.lineTo(tx + n, ty - (n + out));
+          break;
+        case 'bottom-left':
+          ctx.moveTo(tx, ty + n);          ctx.lineTo(tx - (n + out), ty + n);
+          ctx.moveTo(tx, ty + n);          ctx.lineTo(tx, ty + n + out);
+          break;
+        case 'bottom-right':
+          ctx.moveTo(tx, ty + n);          ctx.lineTo(tx + (n + out), ty + n);
+          ctx.moveTo(tx, ty + n);          ctx.lineTo(tx, ty + n + out);
+          break;
+      }
+      ctx.stroke();
+    }
+
+    // 3本線（中央マーク：両側）
+    function drawThreeEqualLines(ctx, centerX, centerY, halfLengthPx, direction, mm2px, spacingMm = 3) {
+      const spacing = mm2px(spacingMm);
+      ctx.beginPath();
+      if (direction === 'vertical') {
+        ctx.moveTo(centerX,           centerY - halfLengthPx);
+        ctx.lineTo(centerX,           centerY + halfLengthPx);
+        ctx.moveTo(centerX - spacing, centerY - halfLengthPx);
+        ctx.lineTo(centerX - spacing, centerY + halfLengthPx);
+        ctx.moveTo(centerX + spacing, centerY - halfLengthPx);
+        ctx.lineTo(centerX + spacing, centerY + halfLengthPx);
+      } else {
+        ctx.moveTo(centerX - halfLengthPx, centerY);
+        ctx.lineTo(centerX + halfLengthPx, centerY);
+        ctx.moveTo(centerX - halfLengthPx, centerY - spacing);
+        ctx.lineTo(centerX + halfLengthPx, centerY - spacing);
+        ctx.moveTo(centerX - halfLengthPx, centerY + spacing);
+        ctx.lineTo(centerX + halfLengthPx, centerY + spacing);
+      }
+      ctx.stroke();
+    }
+
+    // 3本線（外周：中心±間隔）
+    function drawThreeTicksCentered(ctx, centerX, centerY, lengthPx, side, spacingPx) {
+      const s = spacingPx;
+      // keep style from caller; use round caps for visibility
+      const prevCap = ctx.lineCap;
+      ctx.lineCap = 'round';
+
+      const seg = (x1, y1, x2, y2) => {
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      };
+
+      switch (side) {
+        case 'top': // outward: -y
+          // 中央
+          seg(centerX,       centerY,       centerX,       centerY - lengthPx);
+          // 左右±n
+          seg(centerX - s,   centerY,       centerX - s,   centerY - lengthPx);
+          seg(centerX + s,   centerY,       centerX + s,   centerY - lengthPx);
+          break;
+        case 'bottom': // outward: +y
+          seg(centerX,       centerY,       centerX,       centerY + lengthPx);
+          seg(centerX - s,   centerY,       centerX - s,   centerY + lengthPx);
+          seg(centerX + s,   centerY,       centerX + s,   centerY + lengthPx);
+          break;
+        case 'left': // outward: -x
+          seg(centerX,       centerY,       centerX - lengthPx, centerY);
+          seg(centerX,       centerY - s,   centerX - lengthPx, centerY - s);
+          seg(centerX,       centerY + s,   centerX - lengthPx, centerY + s);
+          break;
+        case 'right': // outward: +x
+          seg(centerX,       centerY,       centerX + lengthPx, centerY);
+          seg(centerX,       centerY - s,   centerX + lengthPx, centerY - s);
+          seg(centerX,       centerY + s,   centerX + lengthPx, centerY + s);
+          break;
+      }
+
+      ctx.lineCap = prevCap;
+    }
+
+    // 3本線（中央マーク：一方向のみ）: 端に寄せた三本線
+    function drawThreeOneSidedTicks(ctx, centerX, centerY, lengthPx, side, spacingPx, dir) {
+      // dir: +1 or -1 — offset direction along the edge's tangent toward the nearest outer corner
+      const d = spacingPx * (dir || 1);
+      ctx.beginPath();
+      switch (side) {
+        case 'top': { // outward = negative y
+          // x positions: base, base+d, base+2d
+          ctx.moveTo(centerX,     centerY); ctx.lineTo(centerX,     centerY - lengthPx);
+          ctx.moveTo(centerX + d, centerY); ctx.lineTo(centerX + d, centerY - lengthPx);
+          ctx.moveTo(centerX + 2*d, centerY); ctx.lineTo(centerX + 2*d, centerY - lengthPx);
+          break;
+        }
+        case 'bottom': { // outward = positive y
+          ctx.moveTo(centerX,     centerY); ctx.lineTo(centerX,     centerY + lengthPx);
+          ctx.moveTo(centerX + d, centerY); ctx.lineTo(centerX + d, centerY + lengthPx);
+          ctx.moveTo(centerX + 2*d, centerY); ctx.lineTo(centerX + 2*d, centerY + lengthPx);
+          break;
+        }
+        case 'left': { // outward = negative x
+          // y positions: base, base+d, base+2d
+          ctx.moveTo(centerX, centerY);           ctx.lineTo(centerX - lengthPx, centerY);
+          ctx.moveTo(centerX, centerY + d);       ctx.lineTo(centerX - lengthPx, centerY + d);
+          ctx.moveTo(centerX, centerY + 2*d);     ctx.lineTo(centerX - lengthPx, centerY + 2*d);
+          break;
+        }
+        case 'right': { // outward = positive x
+          ctx.moveTo(centerX, centerY);           ctx.lineTo(centerX + lengthPx, centerY);
+          ctx.moveTo(centerX, centerY + d);       ctx.lineTo(centerX + lengthPx, centerY + d);
+          ctx.moveTo(centerX, centerY + 2*d);     ctx.lineTo(centerX + lengthPx, centerY + 2*d);
+          break;
+        }
+      }
+      ctx.stroke();
+    }
+
+    function drawCenterMarks(ctx, group, tomboLengthMm) {
+      const tickLen = tomboLengthMm / 2;     // 端に出す短線の長さ [mm]
+      ctx.strokeStyle = '#1e40af';
+      ctx.lineWidth = 0.45;                  // 約 1.7px 相当
+      ctx.lineCap = 'round';
+
+      const nMm = Math.abs(group[0].trim.x - group[0].bleed.x); // 断ち落とし量 [mm]
+
+      const tB = calculateGroupBounds(group, 'trim');
+      const bB = calculateGroupBounds(group, 'bleed');
+      const boundaries = findBoundaries(group);
+
+      const uniq = (vals) => {
+        const s = new Set();
+        return vals.filter(v => { const k = Math.round(v * 1000); if (s.has(k)) return false; s.add(k); return true; });
+      };
+
+      // 垂直継ぎ目 → 上端/下端に3本（中央±n）
+      {
+        const xs = uniq(boundaries.filter(b => b.type === 'vertical').map(b => b.position)
+          .filter(x => x > tB.minX && x < tB.maxX));
+        for (const x of xs) {
+          // TOP
+          ctx.beginPath();
+          ctx.moveTo(x,           bB.minY); ctx.lineTo(x,           bB.minY - tickLen);
+          ctx.moveTo(x - nMm,     bB.minY); ctx.lineTo(x - nMm,     bB.minY - tickLen);
+          ctx.moveTo(x + nMm,     bB.minY); ctx.lineTo(x + nMm,     bB.minY - tickLen);
+          ctx.stroke();
+          // BOTTOM
+          ctx.beginPath();
+          ctx.moveTo(x,           bB.maxY); ctx.lineTo(x,           bB.maxY + tickLen);
+          ctx.moveTo(x - nMm,     bB.maxY); ctx.lineTo(x - nMm,     bB.maxY + tickLen);
+          ctx.moveTo(x + nMm,     bB.maxY); ctx.lineTo(x + nMm,     bB.maxY + tickLen);
+          ctx.stroke();
+        }
+      }
+
+      // 水平継ぎ目 → 左端/右端に3本
+      {
+        const ys = uniq(boundaries.filter(b => b.type === 'horizontal').map(b => b.position)
+          .filter(y => y > tB.minY && y < tB.maxY));
+        for (const y of ys) {
+          // LEFT
+          ctx.beginPath();
+          ctx.moveTo(bB.minX, y); ctx.lineTo(bB.minX - tickLen, y);
+          ctx.moveTo(bB.minX, y - nMm); ctx.lineTo(bB.minX - tickLen, y - nMm);
+          ctx.moveTo(bB.minX, y + nMm); ctx.lineTo(bB.minX - tickLen, y + nMm);
+          ctx.stroke();
+          // RIGHT
+          ctx.beginPath();
+          ctx.moveTo(bB.maxX, y); ctx.lineTo(bB.maxX + tickLen, y);
+          ctx.moveTo(bB.maxX, y - nMm); ctx.lineTo(bB.maxX + tickLen, y - nMm);
+          ctx.moveTo(bB.maxX, y + nMm); ctx.lineTo(bB.maxX + tickLen, y + nMm);
+          ctx.stroke();
+        }
+      }
+    }
+
+
+    // 3本線（外周：仕上がり・断ち落とし・仕上がり、外周エッジのみ）
+    function drawPerimeterMarks(ctx, group, tomboLengthMm) {
+      if (!group.length) return;
+
+      const { nMm, verticalStarts, horizontalStarts } = computeSeams(group);
+      const tB = calculateGroupBounds(group, 'trim');
+      const bB = calculateGroupBounds(group, 'bleed');
+
+      // 外周エッジだけに描く
+      const topY    = bB.minY;
+      const bottomY = bB.maxY;
+      const leftX   = bB.minX;
+      const rightX  = bB.maxX;
+
+      const tickLen = tomboLengthMm / 2; // 外側へ出す長さ
+      const seg = (x1,y1,x2,y2) => { ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); };
+
+      ctx.save();
+      ctx.strokeStyle = '#1e40af';
+      ctx.lineWidth = 0.5;       // 0.5mm
+      ctx.lineCap = 'round';
+
+      // --- 縦シーム → 上端/下端に「trim–bleed–trim」の3本
+      for (const x0 of verticalStarts) {
+        // 3本のX（左trim / 中央bleed / 右trim）
+        const xTrimL = x0;          // left trim の右端
+        const xBleed = x0 + nMm;    // 断ち落とし中央
+        const xTrimR = x0 + 2*nMm;  // 右側製品の左trim
+        // Top（外＝上）
+        seg(xTrimL, topY, xTrimL, topY - tickLen);
+        seg(xBleed, topY, xBleed, topY - tickLen);
+        seg(xTrimR, topY, xTrimR, topY - tickLen);
+        // Bottom（外＝下）
+        seg(xTrimL, bottomY, xTrimL, bottomY + tickLen);
+        seg(xBleed, bottomY, xBleed, bottomY + tickLen);
+        seg(xTrimR, bottomY, xTrimR, bottomY + tickLen);
+      }
+
+      // --- 横シーム → 左端/右端に「trim–bleed–trim」の3本
+      for (const y0 of horizontalStarts) {
+        const yTrimT = y0;          // 上製品の下trim
+        const yBleed = y0 + nMm;    // 断ち落とし中央
+        const yTrimB = y0 + 2*nMm;  // 下製品の上trim
+        // Left（外＝左）
+        seg(leftX, yTrimT, leftX - tickLen, yTrimT);
+        seg(leftX, yBleed, leftX - tickLen, yBleed);
+        seg(leftX, yTrimB, leftX - tickLen, yTrimB);
+        // Right（外＝右）
+        seg(rightX, yTrimT, rightX + tickLen, yTrimT);
+        seg(rightX, yBleed, rightX + tickLen, yBleed);
+        seg(rightX, yTrimB, rightX + tickLen, yTrimB);
+      }
+
+      ctx.restore();
+    }
+
+    // グループ外周に配置する十字＋円（ブルズアイ）マーク ---------------------------------
+    // 断ち落とし線のすぐ外側に、上下左右それぞれ1つずつ配置します。
+    // 左右配置時: 縦線20mm・横線9mm・円直径5mm（線幅は他のトンボに合わせる・短線9mm）
+    // 上下配置時: 縦線9mm・横線20mm・円直径5mm（左右の入替・短線9mm）
+    function drawBullseyeMarks(ctx, group, lineWidthMm) {
+      if (!group || !group.length) return;
+      const bB = calculateGroupBounds(group, 'bleed');
+      const GAP = 1; // mm: place marks just outside the bleed line
+      const midX = (bB.minX + bB.maxX) / 2;
+      const midY = (bB.minY + bB.maxY) / 2;
+
+      const r = 2.5;            // 半径（直径5mm）
+      const vLR = 20;           // 左右配置時の縦線長
+      const hLR = 9;            // 左右配置時の横線長（短線9mm）
+      const vTB = 9;            // 上下配置時の縦線長（短線9mm）
+      const hTB = 20;           // 上下配置時の横線長
+
+      ctx.save();
+      ctx.strokeStyle = '#111827';
+      ctx.lineWidth = lineWidthMm; // 他トンボと同一線幅
+      ctx.lineCap = 'butt';
+
+      const circle = (cx, cy) => {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+      };
+      const vline = (cx, cy, len) => {
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - len / 2);
+        ctx.lineTo(cx, cy + len / 2);
+        ctx.stroke();
+      };
+      const hline = (cx, cy, len) => {
+        ctx.beginPath();
+        ctx.moveTo(cx - len / 2, cy);
+        ctx.lineTo(cx + len / 2, cy);
+        ctx.stroke();
+      };
+
+      // --- LEFT（外側 = -x）: 中心は断ち落とし境界から半径ぶん外側+GAP
+      {
+        const cx = bB.minX - r - GAP;
+        const cy = midY;
+        vline(cx, cy, vLR);
+        hline(cx, cy, hLR);
+        circle(cx, cy);
+      }
+      // --- RIGHT（外側 = +x）
+      {
+        const cx = bB.maxX + r + GAP;
+        const cy = midY;
+        vline(cx, cy, vLR);
+        hline(cx, cy, hLR);
+        circle(cx, cy);
+      }
+      // --- TOP（外側 = -y）
+      {
+        const cx = midX;
+        const cy = bB.minY - r - GAP;
+        vline(cx, cy, vTB);
+        hline(cx, cy, hTB);
+        circle(cx, cy);
+      }
+      // --- BOTTOM（外側 = +y）
+      {
+        const cx = midX;
+        const cy = bB.maxY + r + GAP;
+        vline(cx, cy, vTB);
+        hline(cx, cy, hTB);
+        circle(cx, cy);
+      }
+
+      ctx.restore();
+    }
+
+    // 用紙サイズプリセット（mm）- 常に横置き（長辺×短辺）
+    const PRESETS = [
+      // A列本判（A判）
+      { key: "A-zen", label: "A判 全判", w: 878, h: 622, flipGrain: 0 },
+      { key: "A-han", label: "A判 半裁", w: 622, h: 439, flipGrain: 1 },
+      { key: "A-4",  label: "A判 4切",  w: 439, h: 311, flipGrain: 0 },
+      { key: "A-8",  label: "A判 8切",  w: 311, h: 219, flipGrain: 1 },
+      // 菊判
+      { key: "K-zen", label: "菊判 全判", w: 936, h: 632, flipGrain: 0 },
+      { key: "K-han", label: "菊判 半裁", w: 636, h: 469, flipGrain: 1 },
+      { key: "K-san", label: "菊判 三裁", w: 636, h: 313, flipGrain: 1 },
+      { key: "K-san2", label: "菊判 長三裁", w: 936, h: 212, flipGrain: 0 },
+      { key: "K-4",  label: "菊判 4切",  w: 469, h: 317, flipGrain: 0 },
+      { key: "K-6",  label: "菊判 角6切",  w: 317, h: 313, flipGrain: 1 },
+      { key: "K-naga6",  label: "菊判 長6切",  w: 469, h: 212, flipGrain: 0 },
+      { key: "K-8",  label: "菊判 8切",  w: 317, h: 234, flipGrain: 1 },
+      // B列本判（B判）
+      { key: "B-zen", label: "B判 全判", w: 1085, h: 765, flipGrain: 0 },
+      { key: "B-han", label: "B判 半裁", w: 762,  h: 542, flipGrain: 1 },
+      { key: "B-4",  label: "B判 4切",  w: 542,  h: 381, flipGrain: 0 },
+      { key: "B-8",  label: "B判 8切",  w: 381,  h: 271, flipGrain: 1 },
+      // 四六判
+      { key: "46-zen", label: "四六判 全判", w: 1091, h: 788, flipGrain: 0 },
+      { key: "46-san", label: "四六判 三裁", w: 788, h: 363, flipGrain: 1 },
+      { key: "46-san2", label: "四六判 長三裁", w: 1091, h: 262, flipGrain: 0 },
+      { key: "46-han", label: "四六判 半裁", w: 784,  h: 544, flipGrain: 1 },
+      { key: "46-4",  label: "四六判 4切",  w: 544,  h: 392, flipGrain: 0 },
+      { key: "46-6", label: "四六判 角6切", w:392, h:363,flipGrain: 1},
+      { key: "46-naga6", label: "四六判 長6切", w:544, h:262, flipGrain: 0},
+      { key: "46-8",  label: "四六判 8切",  w: 392,  h: 272, flipGrain: 1 },
+    ];
+
+    function computeLayout({
+      paperW,
+      paperH,
+      prodTrimW,
+      prodTrimH,
+      bleedEachSide,
+      placeOrientation,
+      gripMargin,
+      tailMargin,
+      leftRightMargin,
+      leftRightMarginEnabled,
+      centerMargin,
+      centerMarginEnabled
+    }) {
+      let trimW, trimH;
+      if (placeOrientation === "portrait") {
+        trimW = Math.min(prodTrimW, prodTrimH);
+        trimH = Math.max(prodTrimW, prodTrimH);
+      } else {
+        trimW = Math.max(prodTrimW, prodTrimH);
+        trimH = Math.min(prodTrimW, prodTrimH);
+      }
+
+      const bleedW = trimW + 2 * bleedEachSide;
+      const bleedH = trimH + 2 * bleedEachSide;
+
+      const actualLeftRightMargin = leftRightMarginEnabled ? leftRightMargin : 0;
+      const effectiveW = paperW - 2 * actualLeftRightMargin;
+      const effectiveH = paperH - gripMargin - tailMargin;
+
+      const positions = [];
+
+      if (centerMarginEnabled && centerMargin > 0) {
+        const actualCenterMargin = centerMargin;
+        const leftAreaW = (effectiveW - actualCenterMargin) / 2;
+        const rightAreaW = leftAreaW;
+
+        const leftCols = Math.max(0, Math.floor(leftAreaW / bleedW));
+        const leftRows = Math.max(0, Math.floor(effectiveH / bleedH));
+        const rightCols = Math.max(0, Math.floor(rightAreaW / bleedW));
+        const rightRows = Math.max(0, Math.floor(effectiveH / bleedH));
+
+        const leftOffsetX = actualLeftRightMargin + (leftAreaW - leftCols * bleedW) / 2;
+        const rightOffsetX = actualLeftRightMargin + leftAreaW + actualCenterMargin + (rightAreaW - rightCols * bleedW) / 2;
+        const leftOffsetY = tailMargin + (effectiveH - leftRows * bleedH) / 2;
+        const rightOffsetY = tailMargin + (effectiveH - rightRows * bleedH) / 2;
+
+        for (let r = 0; r < leftRows; r++) {
+          for (let c = 0; c < leftCols; c++) {
+            const bleedX = leftOffsetX + c * bleedW;
+            const bleedY = leftOffsetY + r * bleedH;
+            const trimX = bleedX + bleedEachSide;
+            const trimY = bleedY + bleedEachSide;
+            positions.push({
+              bleed: { x: bleedX, y: bleedY, w: bleedW, h: bleedH },
+              trim:  { x: trimX,  y: trimY,  w: trimW, h: trimH },
+              area: 'left'
+            });
+          }
+        }
+        for (let r = 0; r < rightRows; r++) {
+          for (let c = 0; c < rightCols; c++) {
+            const bleedX = rightOffsetX + c * bleedW;
+            const bleedY = rightOffsetY + r * bleedH;
+            const trimX = bleedX + bleedEachSide;
+            const trimY = bleedY + bleedEachSide;
+            positions.push({
+              bleed: { x: bleedX, y: bleedY, w: bleedW, h: bleedH },
+              trim:  { x: trimX,  y: trimY,  w: trimW, h: trimH },
+              area: 'right'
+            });
+          }
+        }
+
+        return {
+          leftCols,
+          leftRows,
+          rightCols,
+          rightRows,
+          totalCols: leftCols + rightCols,
+          totalRows: Math.max(leftRows, rightRows),
+          positions,
+          trimW,
+          trimH,
+          bleedW,
+          bleedH,
+          margins: { gripMargin, tailMargin, leftRightMargin: actualLeftRightMargin, centerMargin: actualCenterMargin }
+        };
+      } else {
+        const cols = Math.max(0, Math.floor(effectiveW / bleedW));
+        const rows = Math.max(0, Math.floor(effectiveH / bleedH));
+        const offsetX = actualLeftRightMargin + (effectiveW - cols * bleedW) / 2;
+        const offsetY = tailMargin + (effectiveH - rows * bleedH) / 2;
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const bleedX = offsetX + c * bleedW;
+            const bleedY = offsetY + r * bleedH;
+            const trimX = bleedX + bleedEachSide;
+            const trimY = bleedY + bleedEachSide;
+            positions.push({
+              bleed: { x: bleedX, y: bleedY, w: bleedW, h: bleedH },
+              trim:  { x: trimX,  y: trimY,  w: trimW, h: trimH },
+              area: 'single'
+            });
+          }
+        }
+        return {
+          leftCols: cols,
+          leftRows: rows,
+          rightCols: 0,
+          rightRows: 0,
+          totalCols: cols,
+          totalRows: rows,
+          positions,
+          trimW,
+          trimH,
+          bleedW,
+          bleedH,
+          margins: { gripMargin, tailMargin, leftRightMargin: actualLeftRightMargin, centerMargin: 0 }
+        };
+      }
+    }
+
+    // --- React Components --------------------------------------------------------
+    function NumberInput({ label, value, onChange, min = 0, step = 1, disabled = false }) {
+      return (
+        <label className="block">
+          <span className={`block text-xs mb-1 ${disabled ? 'text-gray-400 opacity-60' : 'text-gray-600'}`}>{label}</span>
+          <input
+            type="number"
+            className={`w-full rounded-lg border-gray-300 border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${disabled ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
+            value={Number.isFinite(value) ? value : 0}
+            onChange={(e) => onChange(Number(e.target.value))}
+            min={min}
+            step={step}
+            disabled={disabled}
+            aria-disabled={disabled}
+          />
+        </label>
+      );
+    }
+
+    function LayoutStats({ layout, paperW, paperH }) {
+      const { trimW, trimH, leftCols, leftRows, rightCols, rightRows, positions } = layout;
+      const total = positions.length;
+      const leftTotal = leftCols * leftRows;
+      const rightTotal = rightCols * rightRows;
+      return (
+        <div className="rounded-lg bg-blue-50 p-4">
+          <div className="grid grid-cols-3 gap-6 text-sm">
+            <div>
+              <div className="text-gray-600">面付け数</div>
+              <div className="font-semibold text-lg">{total} 面</div>
+              {rightTotal > 0 ? (
+                <div className="text-gray-500">左:{leftTotal} + 右:{rightTotal}</div>
+              ) : (
+                <div className="text-gray-500">{leftCols} × {leftRows}</div>
+              )}
+            </div>
+            <div>
+              <div className="text-gray-600">仕上がりサイズ</div>
+              <div className="font-semibold">{trimW.toFixed(1)} × {trimH.toFixed(1)} mm</div>
+            </div>
+            <div>
+              <div className="text-gray-600">用紙サイズ</div>
+              <div className="font-semibold">{paperW.toFixed(1)} × {paperH.toFixed(1)} mm</div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      // 状態管理 - 用紙は常に横置き
+      const [paperLong, setPaperLong] = useState(936);  // 長辺（菊全判デフォルト）
+      const [paperShort, setPaperShort] = useState(632); // 短辺（菊全判デフォルト）
+      const [prodTrimW, setProdTrimW] = useState(210);
+      const [prodTrimH, setProdTrimH] = useState(297);
+      const [bleedEachSide, setBleedEachSide] = useState(3);
+      const [placeOrientation, setPlaceOrientation] = useState("portrait");
+      const [selectedPreset, setSelectedPreset] = useState("K-zen");
+        const [grain, setGrain] = useState("Y"); // "T" | "Y"  全判Y目デフォルト
+      // マージン設定
+      const [gripMargin, setGripMargin] = useState(10);
+      const [tailMargin, setTailMargin] = useState(10);
+      const [leftRightMargin, setLeftRightMargin] = useState(10);
+      const [leftRightMarginEnabled, setLeftRightMarginEnabled] = useState(true);
+      const [centerMargin, setCenterMargin] = useState(20);
+      const [centerMarginEnabled, setCenterMarginEnabled] = useState(false);
+
+      // CSS上の 1mm あたりのpxを自動測定
+      const [pxPerMm, setPxPerMm] = useState(96 / 25.4);
+      useEffect(() => { setPxPerMm(measurePxPerMm()); }, []);
+
+      // キャンバス参照
+      const wrapperRef = useRef(null);
+      const canvasRef = useRef(null);
+
+      // mm→CSS px変換
+      const mm2px = (mm) => mm * pxPerMm;
+
+      // 用紙サイズの自動判定（横置き前提）
+      const paperW = Math.max(paperLong, paperShort);
+      const paperH = Math.min(paperLong, paperShort);
+      const isPreset = Boolean(selectedPreset);
+
+      // プリセット選択時の処理（T/Yはユーザ選択を保持）
+      useEffect(() => {
+        if (!selectedPreset) return;
+        const preset = PRESETS.find((x) => x.key === selectedPreset);
+        if (preset) {
+          setPaperLong(preset.w);
+          setPaperShort(preset.h);
+          // T/Y はユーザ選択を保持（ここでは反転させない）
+        }
+      }, [selectedPreset]);
+
+      // 現在選択中のプリセット情報
+      const currentPreset = React.useMemo(() => PRESETS.find(x => x.key === selectedPreset) || null, [selectedPreset]);
+      // プレビュー用の「目」(effectiveGrain): flipGrain=1のときだけ反転
+      const effectiveGrain = React.useMemo(() => {
+        const base = grain; // ユーザが選んだ「全判基準」の目
+        const flip = currentPreset && currentPreset.flipGrain === 1; // 半裁/4切/8切など
+        if (!flip) return base;
+        return base === "T" ? "Y" : "T"; // 結果的に反転
+      }, [grain, currentPreset]);
+
+      // レイアウト計算
+      const layout = useMemo(() => computeLayout({
+        paperW, paperH, prodTrimW, prodTrimH, bleedEachSide, placeOrientation,
+        gripMargin, tailMargin, leftRightMargin, leftRightMarginEnabled,
+        centerMargin, centerMarginEnabled
+      }), [paperW, paperH, prodTrimW, prodTrimH, bleedEachSide, placeOrientation, gripMargin, tailMargin, leftRightMargin, leftRightMarginEnabled, centerMargin, centerMarginEnabled]);
+
+      // キャンバス描画
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        const wrapper = wrapperRef.current;
+        if (!canvas || !wrapper) return;
+
+        const padding = 20; // 描画余白
+        const contentW = mm2px(paperW) + padding * 2;
+        const contentH = mm2px(paperH) + padding * 2;
+
+        let animationId = 0;
+        const lastSize = { cssW: -1, cssH: -1 };
+
+        // キャンバス描画
+        const draw = () => {
+          try {
+            const rect = wrapper.getBoundingClientRect();
+            const availableW = Math.max(1, rect.width);
+            const scale = Math.min(1, availableW / contentW) * 0.98;
+
+            const cssW = contentW * scale;
+            const cssH = contentH * scale;
+
+            if (Math.abs(cssW - lastSize.cssW) < 0.5 && Math.abs(cssH - lastSize.cssH) < 0.5) return;
+            lastSize.cssW = cssW; lastSize.cssH = cssH;
+
+            const dpr = window.devicePixelRatio || 1;
+            canvas.style.width = `${cssW}px`;
+            canvas.style.height = `${cssH}px`;
+            const bufferW = Math.ceil(cssW * dpr);
+            const bufferH = Math.ceil(cssH * dpr);
+            canvas.width = bufferW; canvas.height = bufferH;
+
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return;
+
+            ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+            ctx.clearRect(0, 0, contentW, contentH);
+
+            ctx.save();
+            ctx.translate(padding, padding);      // CSS px
+            ctx.scale(pxPerMm, pxPerMm);          // 以降は「mm」単位
+
+            // 用紙の背景
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, paperW, paperH);
+
+            // 紙の目プレビュー
+            if (typeof drawPaperGrain === 'function') {
+              drawPaperGrain(ctx, paperW, paperH, effectiveGrain);
+            }
+
+            // 用紙枠
+            ctx.strokeStyle = "#1f2937";
+            ctx.lineWidth = 0.5;
+            ctx.strokeRect(0, 0, paperW, paperH);
+
+            // マージンエリア
+            // 下マージン（咥え幅）：薄い赤
+            ctx.fillStyle = "rgba(239, 68, 68, 0.2)";
+            ctx.fillRect(0, (paperH - gripMargin), paperW, gripMargin);
+            // 上マージン（咥え尻）：薄いグレー
+            ctx.fillStyle = "rgba(156, 163, 175, 0.2)";
+            ctx.fillRect(0, 0, paperW, tailMargin);
+            // 左右マージン：薄い青
+            if (leftRightMarginEnabled) {
+              ctx.fillStyle = "rgba(59, 130, 246, 0.2)";
+              ctx.fillRect(0, 0, leftRightMargin, paperH);
+              ctx.fillRect((paperW - leftRightMargin), 0, leftRightMargin, paperH);
+            }
+            // 中央マージン：薄い青
+            if (centerMarginEnabled && centerMargin > 0) {
+              ctx.fillStyle = "rgba(59, 130, 246, 0.2)";
+              const actualLeftRightMargin = leftRightMarginEnabled ? leftRightMargin : 0;
+              const centerX = (actualLeftRightMargin + (paperW - 2 * actualLeftRightMargin - centerMargin) / 2);
+              ctx.fillRect(centerX, tailMargin, centerMargin, (paperH - gripMargin - tailMargin));
+            }
+
+            // 裁ち落とし枠（青）
+            ctx.strokeStyle = "#2563eb";
+            ctx.lineWidth = 0.4;
+            for (const pos of layout.positions) {
+              const { x, y, w, h } = pos.bleed;
+              ctx.strokeRect(x, y, w, h);
+            }
+
+            // 仕上がり枠（緑）
+            ctx.strokeStyle = "#16a34a";
+            ctx.lineWidth = 0.4;
+            for (const pos of layout.positions) {
+              const { x, y, w, h } = pos.trim;
+              ctx.strokeRect(x, y, w, h);
+            }
+
+            // トンボ
+            if (typeof drawRegistrationMarks === 'function') {
+              drawRegistrationMarks(ctx, layout);
+            }
+
+            ctx.restore();
+          } catch (e) {
+            console.error('[draw] error', e);
+          }
+        };
+
+        const scheduleRedraw = () => {
+          if (animationId) return;
+          animationId = requestAnimationFrame(() => {
+            animationId = 0;
+            draw();
+          });
+        };
+
+        const resizeObserver = new ResizeObserver(scheduleRedraw);
+        resizeObserver.observe(wrapper);
+        scheduleRedraw();
+        const handleWindowResize = () => scheduleRedraw();
+        window.addEventListener("resize", handleWindowResize);
+        return () => {
+          if (animationId) cancelAnimationFrame(animationId);
+          resizeObserver.disconnect();
+          window.removeEventListener("resize", handleWindowResize);
+        };
+      }, [layout, paperW, paperH, pxPerMm, mm2px, gripMargin, tailMargin, leftRightMargin, leftRightMarginEnabled, centerMargin, centerMarginEnabled, effectiveGrain]);
+
+      useEffect(() => { console.log("✅ Layout tool initialized"); }, []);
+
+      return (
+        <div className="min-h-screen bg-slate-50 p-4">
+          <div className="mx-auto max-w-6xl bg-white rounded-2xl shadow-lg p-6 space-y-6">
+            <div className="text-center">
+              <h1 className="text-2xl font-bold text-gray-900 mb-2">何面付けようか？</h1>
+            </div>
+
+            <div className="space-y-4">
+              {/* プリセット選択と用紙サイズ */}
+              <div>
+                <span className="block text-sm font-medium text-gray-700 mb-2">用紙サイズ（横置き）</span>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block">
+                      <span className="block text-xs text-gray-600 mb-1">プリセット</span>
+                      <select
+                        className="w-full rounded-lg border-gray-300 border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        value={selectedPreset}
+                        onChange={(e) => setSelectedPreset(e.target.value)}
+                      >
+                        <option value="">カスタム</option>
+                        {PRESETS.map((preset) => (
+                          <option key={preset.key} value={preset.key}>{preset.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <NumberInput label="長辺（mm）" value={paperLong} onChange={setPaperLong} min={1} step={0.1} disabled={isPreset} />
+                  <NumberInput label="短辺（mm）" value={paperShort} onChange={setPaperShort} min={1} step={0.1} disabled={isPreset} />
+                </div>
+              </div>
+
+              {/* 仕上がりサイズと裁ち落とし */}
+              <div>
+                <span className="block text-sm font-medium text-gray-700 mb-2">仕上がりサイズ・裁ち落とし</span>
+                <div className="grid grid-cols-3 gap-4">
+                  <NumberInput label="仕上がり 幅（mm）" value={prodTrimW} onChange={setProdTrimW} min={1} step={0.1} />
+                  <NumberInput label="仕上がり 高さ（mm）" value={prodTrimH} onChange={setProdTrimH} min={1} step={0.1} />
+                  <NumberInput label="裁ち落とし 片側（mm）" value={bleedEachSide} onChange={setBleedEachSide} min={0} step={0.1} />
+                </div>
+              </div>
+
+              {/* マージン設定 */}
+              <div>
+                <span className="block text-sm font-medium text-gray-700 mb-2">マージン設定</span>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="min-w-0">
+                    <NumberInput label="咥え幅（下マージン）（mm）" value={gripMargin} onChange={setGripMargin} min={0} step={0.1} />
+                  </div>
+                  <div className="min-w-0">
+                    <NumberInput label="咥え尻（上マージン）（mm）" value={tailMargin} onChange={setTailMargin} min={0} step={0.1} />
+                  </div>
+                  <div className="min-w-0">
+                    <label className="block">
+                      <span className="block text-xs text-gray-600 mb-1">左右マージン（mm）</span>
+                      <div className="grid grid-cols-[auto_auto_1fr] items-center gap-2 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={leftRightMarginEnabled}
+                          onChange={(e) => setLeftRightMarginEnabled(e.target.checked)}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-xs text-gray-600">あり</span>
+                        <input
+                          type="number"
+                          className="w-full min-w-0 rounded-lg border-gray-300 border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                          value={Number.isFinite(leftRightMargin) ? leftRightMargin : 0}
+                          onChange={(e) => setLeftRightMargin(Number(e.target.value))}
+                          min={0}
+                          step={0.1}
+                          disabled={!leftRightMarginEnabled}
+                        />
+                      </div>
+                    </label>
+                  </div>
+                  <div className="min-w-0">
+                    <label className="block">
+                      <span className="block text-xs text-gray-600 mb-1">中央マージン（mm）</span>
+                      <div className="grid grid-cols-[auto_auto_1fr] items-center gap-2 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={centerMarginEnabled}
+                          onChange={(e) => setCenterMarginEnabled(e.target.checked)}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-xs text-gray-600">あり</span>
+                        <input
+                          type="number"
+                          className="w-full min-w-0 rounded-lg border-gray-300 border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                          value={Number.isFinite(centerMargin) ? centerMargin : 0}
+                          onChange={(e) => setCenterMargin(Number(e.target.value))}
+                          min={0}
+                          step={0.1}
+                          disabled={!centerMarginEnabled}
+                        />
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+{/* 配置方向 / 紙の目 */}
+<div>
+  <span className="block text-sm font-medium text-gray-700 mb-2">配置方向 / 紙の目</span>
+  <div className="flex flex-wrap items-center gap-2">
+    {/* 配置方向 */}
+    <div className="flex gap-2">
+      <button
+        className={`px-4 py-2 rounded-lg border font-medium text-sm transition-colors ${
+          placeOrientation === "portrait"
+            ? "bg-blue-600 text-white border-blue-600"
+            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+        }`}
+        onClick={() => setPlaceOrientation("portrait")}
+      >
+        縦置き
+      </button>
+      <button
+        className={`px-4 py-2 rounded-lg border font-medium text-sm transition-colors ${
+          placeOrientation === "landscape"
+            ? "bg-blue-600 text-white border-blue-600"
+            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+        }`}
+        onClick={() => setPlaceOrientation("landscape")}
+      >
+        横置き
+      </button>
+    </div>
+
+    {/* 仕切り */}
+    <span className="mx-2 text-gray-300">|</span>
+
+    {/* 紙の目（全判T目 / 全判Y目） */}
+    <div className="flex gap-2">
+      <button
+        className={`px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
+          grain === "T"
+            ? "bg-sky-600 text-white border-sky-600"
+            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+        }`}
+        onClick={() => setGrain("T")}
+      >
+        全判T目
+      </button>
+      <button
+        className={`px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
+          grain === "Y"
+            ? "bg-sky-600 text-white border-sky-600"
+            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+        }`}
+        onClick={() => setGrain("Y")}
+      >
+        全判Y目
+      </button>
+    </div>
+    {/* 現在の目表示 */}
+    <span className="ml-3 text-sm text-gray-700">
+      断裁後の目：{effectiveGrain === "T" ? "T目" : "Y目"}
+    </span>
+  </div>
+</div>
+
+            </div>
+
+            {/* レイアウト結果 */}
+            <LayoutStats layout={layout} paperW={paperW} paperH={paperH} />
+
+            {/* プレビューエリア */}
+<div className="border rounded-lg overflow-hidden bg-gray-50">
+  <div
+    ref={wrapperRef}
+    className="w-full p-4"
+  >
+    <canvas ref={canvasRef} className="max-w-full border shadow-sm" style={{ display: 'block' }} />
+  </div>
+</div>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
