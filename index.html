@@ -3,13 +3,131 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>面付けツール（プレビュー付き）</title>
+  <title>面付けツール</title>
   <!-- Tailwind CSS (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- React 18 / ReactDOM 18 / Babel Standalone (for JSX in browser) -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Hide number input spin buttons (up/down arrows) */
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    input[type=number] {
+      -moz-appearance: textfield;
+    }
+  </style>
+  <!-- Local fallback for presets when running via file:// (paste JSON into this tag if fetch fails) -->
+  <script type="application/json" id="paper-sizes-json" class="hidden">[
+    {
+      "name_label": "四六判",
+      "name_key": "shiroku",
+      "cuts": [
+        { "cut_key": "zen",   "cut_label": "全判",   "size": [1088, 786], "flip": false },
+        { "cut_key": "han",   "cut_label": "半裁",   "size": [786, 544],  "flip": true  },
+        { "cut_key": "cut4",  "cut_label": "４切",   "size": [544, 392],  "flip": false },
+        { "cut_key": "cut8",  "cut_label": "８切",   "size": [392, 272],  "flip": true  },
+        { "cut_key": "naga8", "cut_label": "長８切", "size": [544, 196],  "flip": false },
+        { "cut_key": "naga2", "cut_label": "長半裁", "size": [1088, 392], "flip": false },
+        { "cut_key": "cut3",  "cut_label": "３切",   "size": [786, 392],  "flip": true  },
+        { "cut_key": "naga3", "cut_label": "長３切", "size": [1088, 261], "flip": false },
+        { "cut_key": "kaku6", "cut_label": "角６切", "size": [392, 362],  "flip": true  },
+        { "cut_key": "naga6", "cut_label": "長６切", "size": [544, 261],  "flip": false }
+      ]
+    },
+    {
+      "name_label": "Ａ列本判",
+      "name_key": "a_hon",
+      "cuts": [
+        { "cut_key": "zen",   "cut_label": "全判",   "size": [878, 622], "flip": false },
+        { "cut_key": "han",   "cut_label": "半裁",   "size": [622, 438], "flip": true  },
+        { "cut_key": "cut4",  "cut_label": "４切",   "size": [438, 311], "flip": false },
+        { "cut_key": "cut8",  "cut_label": "８切",   "size": [311, 219], "flip": true  },
+        { "cut_key": "naga8", "cut_label": "長８切", "size": [438, 155], "flip": false },
+        { "cut_key": "naga2", "cut_label": "長半裁", "size": [878, 311], "flip": false },
+        { "cut_key": "cut3",  "cut_label": "３切",   "size": [622, 291], "flip": true  },
+        { "cut_key": "naga3", "cut_label": "長３切", "size": [878, 206], "flip": false },
+        { "cut_key": "kaku6", "cut_label": "角６切", "size": [311, 291], "flip": true  },
+        { "cut_key": "naga6", "cut_label": "長６切", "size": [438, 206], "flip": false }
+      ]
+    },
+    {
+      "name_label": "Ｂ列本判",
+      "name_key": "b_hon",
+      "cuts": [
+        { "cut_key": "zen",   "cut_label": "全判",   "size": [1082, 762], "flip": false },
+        { "cut_key": "han",   "cut_label": "半裁",   "size": [762, 541],  "flip": true  },
+        { "cut_key": "cut4",  "cut_label": "４切",   "size": [541, 381],  "flip": false },
+        { "cut_key": "cut8",  "cut_label": "８切",   "size": [381, 270],  "flip": true  },
+        { "cut_key": "naga8", "cut_label": "長８切", "size": [541, 190],  "flip": false },
+        { "cut_key": "naga2", "cut_label": "長半裁", "size": [1082, 381], "flip": false },
+        { "cut_key": "cut3",  "cut_label": "３切",   "size": [762, 360],  "flip": true  },
+        { "cut_key": "naga3", "cut_label": "長３切", "size": [1082, 253], "flip": false },
+        { "cut_key": "kaku6", "cut_label": "角６切", "size": [381, 360],  "flip": true  },
+        { "cut_key": "naga6", "cut_label": "長６切", "size": [541, 253],  "flip": false }
+      ]
+    },
+    {
+      "name_label": "菊判",
+      "name_key": "kiku",
+      "cuts": [
+        { "cut_key": "zen",   "cut_label": "全判",   "size": [936, 633],   "flip": false },
+        { "cut_key": "han",   "cut_label": "半裁",   "size": [633, 468],   "flip": true  },
+        { "cut_key": "cut4",  "cut_label": "４切",   "size": [468, 316],   "flip": false },
+        { "cut_key": "cut8",  "cut_label": "８切",   "size": [316, 233.5], "flip": true  },
+        { "cut_key": "naga8", "cut_label": "長８切", "size": [468, 158],   "flip": false },
+        { "cut_key": "naga2", "cut_label": "長半裁", "size": [936, 316],   "flip": false },
+        { "cut_key": "cut3",  "cut_label": "３切",   "size": [633, 311],   "flip": true  },
+        { "cut_key": "naga3", "cut_label": "長３切", "size": [936, 210],   "flip": false },
+        { "cut_key": "kaku6", "cut_label": "角６切", "size": [316, 311],   "flip": true  },
+        { "cut_key": "naga6", "cut_label": "長６切", "size": [468, 210],   "flip": false }
+      ]
+    },
+    {
+      "name_label": "ハトロン判",
+      "name_key": "hatron",
+      "cuts": [
+        { "cut_key": "zen",   "cut_label": "全判",   "size": [1198, 898], "flip": false },
+        { "cut_key": "han",   "cut_label": "半裁",   "size": [898, 598],  "flip": true  },
+        { "cut_key": "cut4",  "cut_label": "４切",   "size": [598, 448],  "flip": false },
+        { "cut_key": "cut8",  "cut_label": "８切",   "size": [448, 299],  "flip": true  },
+        { "cut_key": "naga8", "cut_label": "長８切", "size": [598, 224],  "flip": false },
+        { "cut_key": "naga2", "cut_label": "長半裁", "size": [1198, 448], "flip": false },
+        { "cut_key": "cut3",  "cut_label": "３切",   "size": [898, 398],  "flip": true  },
+        { "cut_key": "naga3", "cut_label": "長３切", "size": [1198, 298], "flip": false },
+        { "cut_key": "kaku6", "cut_label": "角６切", "size": [448, 398],  "flip": true  },
+        { "cut_key": "naga6", "cut_label": "長６切", "size": [598, 298],  "flip": false }
+      ]
+    },
+    {
+      "name_label": "JIS_A列",
+      "name_key": "jis_a",
+      "cuts": [
+        { "cut_key": "bai", "cut_label": "倍判", "size": [1189, 841], "flip": false },
+        { "cut_key": "zen", "cut_label": "全判", "size": [841, 594],  "flip": true  },
+        { "cut_key": "a2",  "cut_label": "Ａ２", "size": [594, 420],  "flip": false },
+        { "cut_key": "a3",  "cut_label": "Ａ３", "size": [420, 297],  "flip": true  },
+        { "cut_key": "a4",  "cut_label": "Ａ４", "size": [297, 210],  "flip": false },
+        { "cut_key": "a5",  "cut_label": "Ａ５", "size": [210, 148],  "flip": true  }
+      ]
+    },
+    {
+      "name_label": "JIS_B列",
+      "name_key": "jis_b",
+      "cuts": [
+        { "cut_key": "bai", "cut_label": "倍判", "size": [1456, 1030], "flip": false },
+        { "cut_key": "zen", "cut_label": "全判", "size": [1030, 728],  "flip": true  },
+        { "cut_key": "b2",  "cut_label": "Ｂ２", "size": [728, 515],   "flip": false },
+        { "cut_key": "b3",  "cut_label": "Ｂ３", "size": [515, 364],   "flip": true  },
+        { "cut_key": "b4",  "cut_label": "Ｂ４", "size": [364, 257],   "flip": false },
+        { "cut_key": "b5",  "cut_label": "Ｂ５", "size": [257, 182],   "flip": true  }
+      ]
+    }
+  ]</script>
 </head>
 <body class="min-h-screen bg-slate-100">
   <div id="root"></div>
@@ -17,20 +135,59 @@
   <script type="text/babel" data-presets="react,env">
     const { useMemo, useRef, useEffect, useState } = React;
 
-    // --- Utilities ---------------------------------------------------------------
+    // 入力欄が編集可能か判定
+    function isEditableField(el) {
+      if (!el || el.disabled || el.readOnly) return false;
+      if (el.tagName === 'TEXTAREA') return true;
+      if (el.tagName === 'INPUT') {
+        const t = (el.type || '').toLowerCase();
+        return t === 'text' || t === 'number' || t === 'search' || t === 'email' || t === 'url';
+      }
+      if (el.tagName === 'SELECT') return true;
+      return false;
+    }
+    // フォーカス可能な入力欄リストを取得
+    function getFocusableList(root) {
+      if (!root) return [];
+      const sel = [
+        'input:not([disabled]):not([type="hidden"])',
+        'select:not([disabled])',
+        'textarea:not([disabled])'
+      ].join(',');
+      return Array.from(root.querySelectorAll(sel)).filter(el => !el.readOnly);
+    }
+
+    // 次の入力欄にフォーカス
+    function focusNextField(current, root = document.getElementById('root')) {
+      const list = getFocusableList(root);
+      const idx = list.indexOf(current);
+      if (idx === -1) return;
+      for (let i = idx + 1; i < list.length; i++) {
+        const el = list[i];
+        if (isEditableField(el)) {
+          el.focus();
+          if (el.tagName === 'INPUT') {
+            try { el.select(); } catch (_) {}
+          }
+          return;
+        }
+      }
+    }
+
+    // 1mmあたりのpx値を測定
     function measurePxPerMm() {
       const probe = document.createElement("div");
-      probe.style.width = "1in"; // CSSの1インチ
+      probe.style.width = "1in";
       probe.style.position = "absolute";
       probe.style.visibility = "hidden";
       document.body.appendChild(probe);
       const cssPPI = probe.getBoundingClientRect().width;
       document.body.removeChild(probe);
-      const pxPerMm = cssPPI / 25.4; // CSS px / mm
+      const pxPerMm = cssPPI / 25.4;
       return Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 96 / 25.4;
     }
 
-    // 面付け位置をカタマリにグループ化
+    // 面付け位置をグループ化
     function groupPositions(positions) {
       if (positions.length === 0) return [];
       const leftPositions = positions.filter(p => p.area === 'left');
@@ -43,7 +200,7 @@
       return groups;
     }
 
-    // カタマリの境界を計算（mm座標のまま）
+    // グループの外接矩形を計算
     function calculateGroupBounds(group, boundType = 'bleed') {
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       group.forEach(pos => {
@@ -57,24 +214,20 @@
       return { minX, minY, maxX, maxY };
     }
 
-    // 製品間の境界線を検出（mm座標のまま） - 0.001mmバケツでFP誤差回避
+    // 製品間の境界線を検出（0.001mm単位でFP誤差回避）
     function findBoundaries(group) {
       const boundaries = [];
       const positions = group.map(p => p.trim);
       if (positions.length <= 1) return boundaries;
-
-      // helper: quantize to 0.001mm buckets to avoid FP mismatches
-      const key = (mm) => Math.round(mm * 1000); // integer key
-
-      // ---- Vertical boundaries (shared left/right edges)
-      const vMap = new Map(); // key(x) -> { left: [], right: [] }
+      const key = (mm) => Math.round(mm * 1000);
+      const vMap = new Map();
       for (const pos of positions) {
         const L = key(pos.x);
         const R = key(pos.x + pos.w);
         if (!vMap.has(L)) vMap.set(L, { left: [], right: [] });
         if (!vMap.has(R)) vMap.set(R, { left: [], right: [] });
-        vMap.get(L).right.push(pos); // rectangles whose RIGHT edge is at x
-        vMap.get(R).left.push(pos);  // rectangles whose LEFT edge is at x
+        vMap.get(L).right.push(pos);
+        vMap.get(R).left.push(pos);
       }
       for (const [kx, lr] of vMap.entries()) {
         if (lr.left.length > 0 && lr.right.length > 0) {
@@ -84,16 +237,14 @@
           boundaries.push({ type: 'vertical', position: kx / 1000, start: minY, end: maxY });
         }
       }
-
-      // ---- Horizontal boundaries (shared top/bottom edges)
-      const hMap = new Map(); // key(y) -> { top: [], bottom: [] }
+      const hMap = new Map();
       for (const pos of positions) {
         const T = key(pos.y);
         const B = key(pos.y + pos.h);
         if (!hMap.has(T)) hMap.set(T, { top: [], bottom: [] });
         if (!hMap.has(B)) hMap.set(B, { top: [], bottom: [] });
-        hMap.get(T).bottom.push(pos); // rectangles whose BOTTOM edge is at y
-        hMap.get(B).top.push(pos);    // rectangles whose TOP edge is at y
+        hMap.get(T).bottom.push(pos);
+        hMap.get(B).top.push(pos);
       }
       for (const [ky, tb] of hMap.entries()) {
         if (tb.top.length > 0 && tb.bottom.length > 0) {
@@ -103,20 +254,15 @@
           boundaries.push({ type: 'horizontal', position: ky / 1000, start: minX, end: maxX });
         }
       }
-
       return boundaries;
     }
 
-    // 製品の「列」と「行」から、隣り合う仕上がりの境目（シーム）を抽出（mm）
+    // 行・列ごとに隣り合う仕上がりのシーム座標を抽出
     function computeSeams(group) {
       const trims = group.map(p => p.trim);
-      const nMm = Math.abs(group[0].trim.x - group[0].bleed.x); // bleedEachSide
-
-      // 量子化キー（0.001mm）
+      const nMm = Math.abs(group[0].trim.x - group[0].bleed.x);
       const key = v => Math.round(v * 1000);
-
-      // ---- 行ごとに縦シーム（x）を集計：同じ行(y)でx順に並べ、連続ペアの右端= seamXStart
-      const rows = new Map(); // key(yTop) -> array of rects in that row
+      const rows = new Map();
       for (const r of trims) {
         const ky = key(r.y);
         if (!rows.has(ky)) rows.set(ky, []);
@@ -124,17 +270,13 @@
       }
       const verticalStarts = [];
       for (const arr of rows.values()) {
-        arr.sort((a,b) => a.x - b.x);
+        arr.sort((a, b) => a.x - b.x);
         for (let i = 0; i < arr.length - 1; i++) {
           const left = arr[i];
-          const right = arr[i+1];
-          // 右端（left.x + left.w）が縦シームの開始（trim-bleed-trim の "最初のtrim"）
           verticalStarts.push(left.x + left.w);
         }
       }
-
-      // ---- 列ごとに横シーム（y）を集計：同じ列(x)でy順に並べ、連続ペアの下端= seamYStart
-      const cols = new Map(); // key(xLeft) -> array of rects in that col
+      const cols = new Map();
       for (const r of trims) {
         const kx = key(r.x);
         if (!cols.has(kx)) cols.set(kx, []);
@@ -142,15 +284,12 @@
       }
       const horizontalStarts = [];
       for (const arr of cols.values()) {
-        arr.sort((a,b) => a.y - b.y);
+        arr.sort((a, b) => a.y - b.y);
         for (let i = 0; i < arr.length - 1; i++) {
           const top = arr[i];
-          const bottom = arr[i+1];
           horizontalStarts.push(top.y + top.h);
         }
       }
-
-      // 一意化（0.001mm）
       const uniq = (vals) => {
         const s = new Set();
         const out = [];
@@ -162,10 +301,9 @@
         }
         return out;
       };
-
       return {
         nMm,
-        verticalStarts:   uniq(verticalStarts),
+        verticalStarts: uniq(verticalStarts),
         horizontalStarts: uniq(horizontalStarts),
       };
     }
@@ -174,8 +312,8 @@
 //       "Y" => 10mm間隔の垂直線（左→右）
 function drawPaperGrain(ctx, paperW, paperH, mode) {
   ctx.save();
-  ctx.strokeStyle = "rgba(37, 99, 235, 0.2)"; // 薄い青・20%
-  ctx.lineWidth = 0.2; // mmの細線
+  ctx.strokeStyle = "rgba(37, 99, 235, 0.3)"; // 薄い青・20%
+  ctx.lineWidth = 0.5; // mmの細線
 
   if (mode === "T") {
     for (let y = 0; y <= paperH; y += 10) {
@@ -505,7 +643,7 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
     function drawBullseyeMarks(ctx, group, lineWidthMm) {
       if (!group || !group.length) return;
       const bB = calculateGroupBounds(group, 'bleed');
-      const GAP = 1; // mm: place marks just outside the bleed line
+      const GAP = 3; // mm: place marks just outside the bleed line
       const midX = (bB.minX + bB.maxX) / 2;
       const midY = (bB.minY + bB.maxY) / 2;
 
@@ -574,37 +712,33 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
       ctx.restore();
     }
 
-    // 用紙サイズプリセット（mm）- 常に横置き（長辺×短辺）
-    const PRESETS = [
-      // A列本判（A判）
-      { key: "A-zen", label: "A判 全判", w: 878, h: 622, flipGrain: 0 },
-      { key: "A-han", label: "A判 半裁", w: 622, h: 439, flipGrain: 1 },
-      { key: "A-4",  label: "A判 4切",  w: 439, h: 311, flipGrain: 0 },
-      { key: "A-8",  label: "A判 8切",  w: 311, h: 219, flipGrain: 1 },
-      // 菊判
-      { key: "K-zen", label: "菊判 全判", w: 936, h: 632, flipGrain: 0 },
-      { key: "K-han", label: "菊判 半裁", w: 636, h: 469, flipGrain: 1 },
-      { key: "K-san", label: "菊判 三裁", w: 636, h: 313, flipGrain: 1 },
-      { key: "K-san2", label: "菊判 長三裁", w: 936, h: 212, flipGrain: 0 },
-      { key: "K-4",  label: "菊判 4切",  w: 469, h: 317, flipGrain: 0 },
-      { key: "K-6",  label: "菊判 角6切",  w: 317, h: 313, flipGrain: 1 },
-      { key: "K-naga6",  label: "菊判 長6切",  w: 469, h: 212, flipGrain: 0 },
-      { key: "K-8",  label: "菊判 8切",  w: 317, h: 234, flipGrain: 1 },
-      // B列本判（B判）
-      { key: "B-zen", label: "B判 全判", w: 1085, h: 765, flipGrain: 0 },
-      { key: "B-han", label: "B判 半裁", w: 762,  h: 542, flipGrain: 1 },
-      { key: "B-4",  label: "B判 4切",  w: 542,  h: 381, flipGrain: 0 },
-      { key: "B-8",  label: "B判 8切",  w: 381,  h: 271, flipGrain: 1 },
-      // 四六判
-      { key: "46-zen", label: "四六判 全判", w: 1091, h: 788, flipGrain: 0 },
-      { key: "46-san", label: "四六判 三裁", w: 788, h: 363, flipGrain: 1 },
-      { key: "46-san2", label: "四六判 長三裁", w: 1091, h: 262, flipGrain: 0 },
-      { key: "46-han", label: "四六判 半裁", w: 784,  h: 544, flipGrain: 1 },
-      { key: "46-4",  label: "四六判 4切",  w: 544,  h: 392, flipGrain: 0 },
-      { key: "46-6", label: "四六判 角6切", w:392, h:363,flipGrain: 1},
-      { key: "46-naga6", label: "四六判 長6切", w:544, h:262, flipGrain: 0},
-      { key: "46-8",  label: "四六判 8切",  w: 392,  h: 272, flipGrain: 1 },
-    ];
+    // 埋め込みJSON (<script id="paper-sizes-json">) からプリセットを読み込む
+    function loadPresetData() {
+      const normalize = (data) => (data || []).map(base => ({
+        name_key: String(base.name_key),
+        name_label: String(base.name_label),
+        cuts: (base.cuts || []).map(c => ({
+          cut_key: String(c.cut_key),
+          cut_label: String(c.cut_label),
+          size: [Number(c.size?.[0]), Number(c.size?.[1])],
+          flip: Boolean(c.flip),
+        })).filter(c => Number.isFinite(c.size[0]) && Number.isFinite(c.size[1]))
+      })).filter(b => b.cuts.length > 0);
+
+      const holder = document.getElementById('paper-sizes-json');
+      const txt = holder && holder.textContent && holder.textContent.trim();
+      if (!txt) {
+        console.error('[presets] inline JSON not found: #paper-sizes-json is empty');
+        return [];
+      }
+      try {
+        const json = JSON.parse(txt);
+        return normalize(json);
+      } catch (e) {
+        console.error('[presets] inline JSON parse error:', e);
+        return [];
+      }
+    }
 
     function computeLayout({
       paperW,
@@ -730,20 +864,25 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
     }
 
     // --- React Components --------------------------------------------------------
-    function NumberInput({ label, value, onChange, min = 0, step = 1, disabled = false }) {
+    function NumberInput({ label, value, onChange, min = 0, step = 1, disabled = false, suffix }) {
       return (
-        <label className="block">
+        <label className="block min-w-0">
           <span className={`block text-xs mb-1 ${disabled ? 'text-gray-400 opacity-60' : 'text-gray-600'}`}>{label}</span>
-          <input
-            type="number"
-            className={`w-full rounded-lg border-gray-300 border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${disabled ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
-            value={Number.isFinite(value) ? value : 0}
-            onChange={(e) => onChange(Number(e.target.value))}
-            min={min}
-            step={step}
-            disabled={disabled}
-            aria-disabled={disabled}
-          />
+          <div className="grid grid-cols-[1fr_auto] items-center gap-x-1 min-w-0">
+            <input
+              type="number"
+              className={`w-full rounded-lg border-gray-300 border px-3 py-2 text-sm tabular-nums text-right focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-700 disabled:opacity-100 disabled:cursor-not-allowed`}
+              value={Number.isFinite(value) ? value : 0}
+              onChange={(e) => onChange(Number(e.target.value))}
+              min={min}
+              step={step}
+              disabled={disabled}
+              aria-disabled={disabled}
+            />
+            {suffix && (
+              <span className="ml-1 text-xs text-gray-400 select-none whitespace-nowrap">{suffix}</span>
+            )}
+          </div>
         </label>
       );
     }
@@ -766,7 +905,7 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
               )}
             </div>
             <div>
-              <div className="text-gray-600">仕上がりサイズ</div>
+              <div className="text-gray-600">製品サイズ</div>
               <div className="font-semibold">{trimW.toFixed(1)} × {trimH.toFixed(1)} mm</div>
             </div>
             <div>
@@ -780,14 +919,55 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
 
     function App() {
       // 状態管理 - 用紙は常に横置き
+      // フルスクリーンプレビュー状態
+      const [isFullscreen, setIsFullscreen] = useState(false);
+      // 通常プレビューでエリアにフィットするか（実寸 or フィット）
+      const [fitToArea, setFitToArea] = useState(true);
+      const [fitScale, setFitScale] = useState(1);
       const [paperLong, setPaperLong] = useState(936);  // 長辺（菊全判デフォルト）
       const [paperShort, setPaperShort] = useState(632); // 短辺（菊全判デフォルト）
       const [prodTrimW, setProdTrimW] = useState(210);
       const [prodTrimH, setProdTrimH] = useState(297);
       const [bleedEachSide, setBleedEachSide] = useState(3);
       const [placeOrientation, setPlaceOrientation] = useState("portrait");
-      const [selectedPreset, setSelectedPreset] = useState("K-zen");
-        const [grain, setGrain] = useState("Y"); // "T" | "Y"  全判Y目デフォルト
+      // const [selectedPreset, setSelectedPreset] = useState("K-zen");
+      const [grain, setGrain] = useState("Y"); // "T" | "Y"  全判Y目デフォルト
+      const [customMode, setCustomMode] = useState(false); // カスタム入力モード（trueでプルダウン無効・タテ/ヨコ有効）
+
+      // 外部プリセット
+      const [bases, setBases] = useState([]); // [{name_key,name_label,cuts:[...]}]
+      const [selectedBaseKey, setSelectedBaseKey] = useState('');
+      const [selectedCutKey, setSelectedCutKey] = useState('');
+
+      // 初回ロード
+      useEffect(() => {
+        const data = loadPresetData();
+        setBases(data);
+        console.log('[presets] loaded', { count: data.length });
+      }, []);
+
+      // ベース／断裁の候補と選択
+      const baseOptions = useMemo(() => bases.map(b => ({ key: b.name_key, label: b.name_label })), [bases]);
+      const currentBase = useMemo(() => bases.find(b => b.name_key === selectedBaseKey) || null, [bases, selectedBaseKey]);
+      const cutOptions = useMemo(() => (currentBase?.cuts || []).map(c => ({ key: c.cut_key, label: c.cut_label })), [currentBase]);
+      const currentCut = useMemo(() => (currentBase?.cuts || []).find(c => c.cut_key === selectedCutKey) || null, [currentBase, selectedCutKey]);
+
+      // 初期選択（データ到着→デフォルトベース優先で選択、ベース変更→デフォルトカット優先で選択）
+      useEffect(() => {
+        if (!bases.length) return;
+        if (!selectedBaseKey) {
+          const defaultBase = bases.find(b => b.name_key === 'kiku') || bases[0];
+          setSelectedBaseKey(defaultBase.name_key);
+        }
+      }, [bases]);
+
+      useEffect(() => {
+        if (!currentBase) return;
+        if (!selectedCutKey) {
+          const defaultCut = currentBase.cuts.find(c => c.cut_key === 'zen') || currentBase.cuts[0];
+          setSelectedCutKey(defaultCut?.cut_key || '');
+        }
+      }, [currentBase?.name_key]);
       // マージン設定
       const [gripMargin, setGripMargin] = useState(10);
       const [tailMargin, setTailMargin] = useState(10);
@@ -800,6 +980,39 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
       const [pxPerMm, setPxPerMm] = useState(96 / 25.4);
       useEffect(() => { setPxPerMm(measurePxPerMm()); }, []);
 
+      // 入力欄: フォーカス時に全選択 / Enter確定で次の項目へ
+      useEffect(() => {
+        const root = document.getElementById('root');
+        if (!root) return;
+
+        const onFocusIn = (e) => {
+          const t = e.target;
+          if (!isEditableField(t)) return;
+          // フォーカス直後に全選択（マウスアップでの選択上書きを回避）
+          if (t.tagName === 'INPUT') {
+            setTimeout(() => { try { t.select(); } catch (_) {} }, 0);
+          }
+        };
+
+        const onKeyDown = (e) => {
+          const t = e.target;
+          if (!isEditableField(t)) return;
+          // Enter / NumpadEnter で次の入力欄へ移動（チェックボックス等は対象外）
+          if (e.key === 'Enter' || e.key === 'NumpadEnter') {
+            e.preventDefault();
+            e.stopPropagation();
+            focusNextField(t, root);
+          }
+        };
+
+        root.addEventListener('focusin', onFocusIn, true);
+        root.addEventListener('keydown', onKeyDown, true);
+        return () => {
+          root.removeEventListener('focusin', onFocusIn, true);
+          root.removeEventListener('keydown', onKeyDown, true);
+        };
+      }, []);
+
       // キャンバス参照
       const wrapperRef = useRef(null);
       const canvasRef = useRef(null);
@@ -810,65 +1023,242 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
       // 用紙サイズの自動判定（横置き前提）
       const paperW = Math.max(paperLong, paperShort);
       const paperH = Math.min(paperLong, paperShort);
-      const isPreset = Boolean(selectedPreset);
 
-      // プリセット選択時の処理（T/Yはユーザ選択を保持）
+      // 選択された断裁サイズを反映（常に横置き：長辺×短辺）
       useEffect(() => {
-        if (!selectedPreset) return;
-        const preset = PRESETS.find((x) => x.key === selectedPreset);
-        if (preset) {
-          setPaperLong(preset.w);
-          setPaperShort(preset.h);
-          // T/Y はユーザ選択を保持（ここでは反転させない）
-        }
-      }, [selectedPreset]);
+        if (customMode) return; // カスタム時は自動反映しない
+        if (!currentCut?.size) return;
+        const [a, b] = currentCut.size;
+        const W = Math.max(a, b);
+        const H = Math.min(a, b);
+        setPaperLong(W);
+        setPaperShort(H);
+      }, [currentCut, customMode]);
 
-      // 現在選択中のプリセット情報
-      const currentPreset = React.useMemo(() => PRESETS.find(x => x.key === selectedPreset) || null, [selectedPreset]);
-      // プレビュー用の「目」(effectiveGrain): flipGrain=1のときだけ反転
+      // カスタム→OFFに戻した瞬間も、プリセット寸法に復帰
+      useEffect(() => {
+        if (customMode) return;
+        if (!currentCut?.size) return;
+        const [a, b] = currentCut.size;
+        const W = Math.max(a, b);
+        const H = Math.min(a, b);
+        setPaperLong(W);
+        setPaperShort(H);
+      }, [customMode]);
+
+      // プレビュー用の「目」(effectiveGrain): cut.flip が true のときだけ反転
       const effectiveGrain = React.useMemo(() => {
         const base = grain; // ユーザが選んだ「全判基準」の目
-        const flip = currentPreset && currentPreset.flipGrain === 1; // 半裁/4切/8切など
+        const flip = currentCut?.flip;
         if (!flip) return base;
-        return base === "T" ? "Y" : "T"; // 結果的に反転
-      }, [grain, currentPreset]);
+        return base === 'T' ? 'Y' : 'T';
+      }, [grain, currentCut]);
 
-      // レイアウト計算
+      // PNGエクスポート用関数
+      const handleSavePNG = async (targetWidthPx = 2000) => {
+        try {
+          const padding = 20; // 描画余白（drawと合わせる）
+          const contentW = mm2px(paperW) + padding * 2;
+          const contentH = mm2px(paperH) + padding * 2;
+          const scaleExport = targetWidthPx / contentW;
+          const targetHeightPx = Math.max(1, Math.round(contentH * scaleExport));
+          const footerHeightPx = 48; // フッター情報エリアの高さ(px)
+
+          // オフスクリーンキャンバス（フッターぶんを追加）
+          const off = document.createElement('canvas');
+          off.width = targetWidthPx;
+          off.height = targetHeightPx + footerHeightPx;
+          const ctx = off.getContext('2d');
+          if (!ctx) return;
+
+          // 描画系：画面描画と同じロジック（mmベース→px）
+          ctx.setTransform(scaleExport, 0, 0, scaleExport, 0, 0);
+          ctx.clearRect(0, 0, contentW, contentH);
+          ctx.save();
+          ctx.translate(padding, padding); // CSS pxベース
+          ctx.scale(pxPerMm, pxPerMm);     // 以降は mm 単位
+
+          // 背景紙
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, paperW, paperH);
+
+          // 紙の目
+          if (typeof drawPaperGrain === 'function') {
+            drawPaperGrain(ctx, paperW, paperH, effectiveGrain);
+          }
+
+          // 用紙枠
+          ctx.strokeStyle = '#1f2937';
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(0, 0, paperW, paperH);
+
+          // マージン塗り
+          // 下（咥え）
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+          ctx.fillRect(0, (paperH - gripMargin), paperW, gripMargin);
+          // 上（咥え尻）
+          ctx.fillStyle = 'rgba(156, 163, 175, 0.2)';
+          ctx.fillRect(0, 0, paperW, tailMargin);
+          // 左右
+          if (leftRightMarginEnabled) {
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+            ctx.fillRect(0, 0, leftRightMargin, paperH);
+            ctx.fillRect((paperW - leftRightMargin), 0, leftRightMargin, paperH);
+          }
+          // 中央
+          if (centerMarginEnabled && centerMargin > 0) {
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+            const actualLeftRightMargin = leftRightMarginEnabled ? leftRightMargin : 0;
+            const centerX = (actualLeftRightMargin + (paperW - 2 * actualLeftRightMargin - centerMargin) / 2);
+            ctx.fillRect(centerX, tailMargin, centerMargin, (paperH - gripMargin - tailMargin));
+          }
+
+          // 裁ち落とし枠
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 0.4;
+          for (const pos of layout.positions) {
+            const { x, y, w, h } = pos.bleed;
+            ctx.strokeRect(x, y, w, h);
+          }
+
+          // 仕上がり枠
+          ctx.strokeStyle = '#16a34a';
+          ctx.lineWidth = 0.4;
+          for (const pos of layout.positions) {
+            const { x, y, w, h } = pos.trim;
+            ctx.strokeRect(x, y, w, h);
+          }
+
+          // トンボ類
+          if (typeof drawRegistrationMarks === 'function') {
+            drawRegistrationMarks(ctx, layout);
+          }
+
+          ctx.restore();
+
+          // --- フッター情報（ピクセル座標で描画） ---
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          // 背景帯（白）
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, targetHeightPx, targetWidthPx, footerHeightPx);
+          // 罫線
+          ctx.strokeStyle = '#e5e7eb';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(0, targetHeightPx + 0.5);
+          ctx.lineTo(targetWidthPx, targetHeightPx + 0.5);
+          ctx.stroke();
+          // テキスト（左右中央揃え・プリセット名対応）
+          const paperLabel = (!customMode && currentBase && currentCut)
+            ? `${currentBase.name_label} ${currentCut.cut_label}（${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ）`
+            : `${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ`;
+          const paperText = `紙サイズ: ${paperLabel}`;
+          const trimText  = `製品仕上がりサイズ: ${layout.trimW.toFixed(1)}×${layout.trimH.toFixed(1)}ミリ`;
+          const countText = `面付け数: ${layout.positions.length}面`;
+          const infoLine = `${paperText}　　${trimText}　　${countText}`; // 全角スペースで区切り
+          ctx.fillStyle = '#111827';
+          ctx.font = '14px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'center';
+          const centerX = targetWidthPx / 2;
+          const centerY = targetHeightPx + footerHeightPx / 2;
+          ctx.fillText(infoLine, centerX, centerY);
+
+          // PNGへ
+          const dataURL = off.toDataURL('image/png');
+          const a = document.createElement('a');
+          const ts = new Date().toISOString().replace(/[:.]/g, '-');
+          a.download = `imposition_${Math.round(paperW)}x${Math.round(paperH)}mm_${ts}_w${targetWidthPx}.png`;
+          a.href = dataURL;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } catch (e) {
+          console.error('PNG export failed:', e);
+        }
+      };
       const layout = useMemo(() => computeLayout({
         paperW, paperH, prodTrimW, prodTrimH, bleedEachSide, placeOrientation,
         gripMargin, tailMargin, leftRightMargin, leftRightMarginEnabled,
         centerMargin, centerMarginEnabled
       }), [paperW, paperH, prodTrimW, prodTrimH, bleedEachSide, placeOrientation, gripMargin, tailMargin, leftRightMargin, leftRightMarginEnabled, centerMargin, centerMarginEnabled]);
 
-      // キャンバス描画
       useEffect(() => {
         const canvas = canvasRef.current;
         const wrapper = wrapperRef.current;
-        if (!canvas || !wrapper) return;
+        if (!canvas) return;
 
         const padding = 20; // 描画余白
-        const contentW = mm2px(paperW) + padding * 2;
-        const contentH = mm2px(paperH) + padding * 2;
+        // contentW/contentH are now provided by a helper function
+        const getContentSize = () => {
+          const w = mm2px(paperW) + padding * 2;
+          const h = mm2px(paperH) + padding * 2;
+          return { contentW: w, contentH: h };
+        };
 
+        const getAvailableSize = () => {
+          if (isFullscreen) {
+            return { w: window.innerWidth, h: window.innerHeight };
+          }
+          const w = Math.max(1, wrapper?.clientWidth || 1);
+          const h = Math.max(1, wrapper?.clientHeight || 1);
+          return { w, h };
+        };
+
+        // スケール計算・キャッシュ（安定化・ヒステリシス付き）
         let animationId = 0;
+        let rafForScale = 0;
         const lastSize = { cssW: -1, cssH: -1 };
+
+        // スケール計算・キャッシュ（安定化・ヒステリシス付き、極小サイズは無視して次フレームで再試行）
+        const computeAndSetScale = () => {
+          const { contentW, contentH } = getContentSize();
+          const { w: rawW, h: rawH } = getAvailableSize();
+          // 極小（レイアウト未確定）なら次フレームで再試行
+          if (!Number.isFinite(rawW) || !Number.isFinite(rawH) || rawW < 100 || rawH < 100) {
+            if (!rafForScale) {
+              rafForScale = requestAnimationFrame(() => {
+                rafForScale = 0;
+                computeAndSetScale();
+              });
+            }
+            return;
+          }
+          const availableW = Math.max(1, rawW);
+          const availableH = Math.max(1, rawH);
+          // Fit logic: fullscreen fits both, normal preview fits width only
+          let target;
+          if (isFullscreen) {
+            // Fullscreen: fit both dimensions
+            target = Math.min(availableW / contentW, availableH / contentH);
+          } else if (fitToArea) {
+            // Normal preview: fit to width so it fills horizontally
+            target = availableW / contentW;
+          } else {
+            target = 1;
+          }
+          const rounded = Math.max(0, Math.round(target * 10000) / 10000);
+          const EPS = 0.001;
+          setFitScale(prev => (Math.abs((rounded || 1) - (prev || 1)) < EPS ? prev : (rounded || 1)));
+        };
 
         // キャンバス描画
         const draw = () => {
           try {
-            const rect = wrapper.getBoundingClientRect();
-            const availableW = Math.max(1, rect.width);
-            const scale = Math.min(1, availableW / contentW) * 0.98;
+            const { contentW, contentH } = getContentSize();
+            // スケールはキャッシュされた値を利用
+            const scale = fitScale || 1;
+            // CSSピクセル値は直接スケール計算値を使う
+            const cssW = Math.max(1, contentW * scale);
+            const cssH = Math.max(1, contentH * scale);
 
-            const cssW = contentW * scale;
-            const cssH = contentH * scale;
-
-            if (Math.abs(cssW - lastSize.cssW) < 0.5 && Math.abs(cssH - lastSize.cssH) < 0.5) return;
+            const sizeChanged = Math.abs(cssW - lastSize.cssW) >= 0.5 || Math.abs(cssH - lastSize.cssH) >= 0.5;
             lastSize.cssW = cssW; lastSize.cssH = cssH;
 
             const dpr = window.devicePixelRatio || 1;
             canvas.style.width = `${cssW}px`;
             canvas.style.height = `${cssH}px`;
+            canvas.style.aspectRatio = `${contentW} / ${contentH}`;
             const bufferW = Math.ceil(cssW * dpr);
             const bufferH = Math.ceil(cssH * dpr);
             canvas.width = bufferW; canvas.height = bufferH;
@@ -953,75 +1343,133 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
           });
         };
 
-        const resizeObserver = new ResizeObserver(scheduleRedraw);
-        resizeObserver.observe(wrapper);
+        const resizeObserver = new ResizeObserver(() => {
+          computeAndSetScale();
+          scheduleRedraw();
+        });
+        if (!isFullscreen && wrapper) {
+          // 通常時は wrapper のサイズ変化だけを見る
+          resizeObserver.observe(wrapper);
+        }
+        // FS時のみウインドウリサイズを監視（通常時はROに任せる）
+        const handleWindowResize = () => { computeAndSetScale(); scheduleRedraw(); };
+        if (isFullscreen) {
+          window.addEventListener("resize", handleWindowResize);
+        }
+        computeAndSetScale();
         scheduleRedraw();
-        const handleWindowResize = () => scheduleRedraw();
-        window.addEventListener("resize", handleWindowResize);
+        let postInitRaf = requestAnimationFrame(() => {
+          computeAndSetScale();
+          scheduleRedraw();
+          postInitRaf = 0;
+        });
+
         return () => {
           if (animationId) cancelAnimationFrame(animationId);
+          if (rafForScale) cancelAnimationFrame(rafForScale);
+          if (postInitRaf) cancelAnimationFrame(postInitRaf);
           resizeObserver.disconnect();
-          window.removeEventListener("resize", handleWindowResize);
+          if (isFullscreen) window.removeEventListener("resize", handleWindowResize);
         };
-      }, [layout, paperW, paperH, pxPerMm, mm2px, gripMargin, tailMargin, leftRightMargin, leftRightMarginEnabled, centerMargin, centerMarginEnabled, effectiveGrain]);
+      }, [layout, paperW, paperH, pxPerMm, mm2px, gripMargin, tailMargin, leftRightMargin, leftRightMarginEnabled, centerMargin, centerMarginEnabled, effectiveGrain, isFullscreen, fitToArea, fitScale]);
 
+
+
+      // レイアウト計算
+      // キャンバス描画
       useEffect(() => { console.log("✅ Layout tool initialized"); }, []);
 
       return (
-        <div className="min-h-screen bg-slate-50 p-4">
-          <div className="mx-auto max-w-6xl bg-white rounded-2xl shadow-lg p-6 space-y-6">
-            <div className="text-center">
-              <h1 className="text-2xl font-bold text-gray-900 mb-2">何面付けようか？</h1>
-            </div>
+        <div className="min-h-screen bg-white p-4">
+          <div className="mx-auto max-w-7xl p-3 space-y-6">
 
             <div className="space-y-4">
               {/* プリセット選択と用紙サイズ */}
-              <div>
-                <span className="block text-sm font-medium text-gray-700 mb-2">用紙サイズ（横置き）</span>
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <label className="block">
-                      <span className="block text-xs text-gray-600 mb-1">プリセット</span>
-                      <select
-                        className="w-full rounded-lg border-gray-300 border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        value={selectedPreset}
-                        onChange={(e) => setSelectedPreset(e.target.value)}
-                      >
-                        <option value="">カスタム</option>
-                        {PRESETS.map((preset) => (
-                          <option key={preset.key} value={preset.key}>{preset.label}</option>
-                        ))}
-                      </select>
-                    </label>
+              <section aria-labelledby="paper-size-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
+                <h2 id="paper-size-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">用紙サイズ（mm）</h2>
+                <div className="space-y-2">
+                  {/* 1行目：判型／断裁セレクト＋カスタム */}
+                  <div className="flex flex-nowrap items-end gap-2">
+                    <div className="flex-[3_1_0%] min-w-0 opacity-100">
+                      <label className="block">
+                        <span className="block text-xs text-gray-600 mb-1">判型</span>
+                        <select
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${customMode ? 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300'}`}
+                          value={selectedBaseKey}
+                          onChange={(e) => { setSelectedBaseKey(e.target.value); setSelectedCutKey(''); }}
+                          disabled={customMode}
+                          aria-disabled={customMode}
+                        >
+                          {baseOptions.map((b) => (
+                            <option key={b.key} value={b.key}>{b.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="flex-[2_1_0%] min-w-0">
+                      <label className="block">
+                        <span className="block text-xs text-gray-600 mb-1">断裁</span>
+                        <select
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${customMode ? 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300'}`}
+                          value={selectedCutKey}
+                          onChange={(e) => setSelectedCutKey(e.target.value)}
+                          disabled={customMode}
+                          aria-disabled={customMode}
+                        >
+                          {(currentBase?.cuts || []).map((c) => (
+                            <option key={c.cut_key} value={c.cut_key}>{c.cut_label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
                   </div>
-                  <NumberInput label="長辺（mm）" value={paperLong} onChange={setPaperLong} min={1} step={0.1} disabled={isPreset} />
-                  <NumberInput label="短辺（mm）" value={paperShort} onChange={setPaperShort} min={1} step={0.1} disabled={isPreset} />
+
+                  {/* 2行目：タテ／ヨコ（カスタム時のみ有効）＋カスタムチェックボックス */}
+                  <div className="flex flex-nowrap items-start gap-2">
+                    <div className="flex flex-col items-center pt-5">
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        checked={customMode}
+                        onChange={(e) => setCustomMode(e.target.checked)}
+                        aria-label="カスタム切替"
+                      />
+                      <span
+                        className={`mt-1 inline-block w-2 h-2 rounded-full ${customMode ? 'bg-blue-600' : 'bg-gray-300'}`}
+                        aria-hidden="true"
+                      ></span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 flex-1">
+                      <NumberInput label="タテ" value={paperLong} onChange={setPaperLong} min={1} step={0.5} disabled={!customMode} />
+                      <NumberInput label="ヨコ" value={paperShort} onChange={setPaperShort} min={1} step={0.5} disabled={!customMode} />
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </section>
 
               {/* 仕上がりサイズと裁ち落とし */}
-              <div>
-                <span className="block text-sm font-medium text-gray-700 mb-2">仕上がりサイズ・裁ち落とし</span>
+              <section aria-labelledby="trim-bleed-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
+                <h2 id="trim-bleed-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">仕上がりサイズ・裁ち落とし（mm）</h2>
                 <div className="grid grid-cols-3 gap-4">
-                  <NumberInput label="仕上がり 幅（mm）" value={prodTrimW} onChange={setProdTrimW} min={1} step={0.1} />
-                  <NumberInput label="仕上がり 高さ（mm）" value={prodTrimH} onChange={setProdTrimH} min={1} step={0.1} />
-                  <NumberInput label="裁ち落とし 片側（mm）" value={bleedEachSide} onChange={setBleedEachSide} min={0} step={0.1} />
+                  <NumberInput label="タテ" value={prodTrimW} onChange={setProdTrimW} min={1} step={0.5} />
+                  <NumberInput label="ヨコ" value={prodTrimH} onChange={setProdTrimH} min={1} step={0.5} />
+                  <NumberInput label="裁ち落とし" value={bleedEachSide} onChange={setBleedEachSide} min={0} step={0.1} />
                 </div>
-              </div>
+              </section>
 
               {/* マージン設定 */}
-              <div>
-                <span className="block text-sm font-medium text-gray-700 mb-2">マージン設定</span>
+              <section aria-labelledby="margin-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
+                <h2 id="margin-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">マージン設定（mm）</h2>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="min-w-0">
-                    <NumberInput label="咥え幅（下マージン）（mm）" value={gripMargin} onChange={setGripMargin} min={0} step={0.1} />
+                    <NumberInput label="咥え" value={gripMargin} onChange={setGripMargin} min={0} step={0.5} />
                   </div>
                   <div className="min-w-0">
-                    <NumberInput label="咥え尻（上マージン）（mm）" value={tailMargin} onChange={setTailMargin} min={0} step={0.1} />
+                    <NumberInput label="咥え尻" value={tailMargin} onChange={setTailMargin} min={0} step={0.5} />
                   </div>
                   <div className="min-w-0">
                     <label className="block">
-                      <span className="block text-xs text-gray-600 mb-1">左右マージン（mm）</span>
+                      <span className="block text-xs text-gray-600 mb-1">左右マージン</span>
                       <div className="grid grid-cols-[auto_auto_1fr] items-center gap-2 min-w-0">
                         <input
                           type="checkbox"
@@ -1030,21 +1478,23 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
                           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
                         <span className="text-xs text-gray-600">あり</span>
-                        <input
-                          type="number"
-                          className="w-full min-w-0 rounded-lg border-gray-300 border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
-                          value={Number.isFinite(leftRightMargin) ? leftRightMargin : 0}
-                          onChange={(e) => setLeftRightMargin(Number(e.target.value))}
-                          min={0}
-                          step={0.1}
-                          disabled={!leftRightMarginEnabled}
-                        />
+                        <div className="min-w-0">
+                          <input
+                            type="number"
+                            className="w-full min-w-0 rounded-lg border-gray-300 border px-3 py-2 text-sm tabular-nums text-right focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                            value={Number.isFinite(leftRightMargin) ? leftRightMargin : 0}
+                            onChange={(e) => setLeftRightMargin(Number(e.target.value))}
+                            min={0}
+                            step={0.1}
+                            disabled={!leftRightMarginEnabled}
+                          />
+                        </div>
                       </div>
                     </label>
                   </div>
                   <div className="min-w-0">
                     <label className="block">
-                      <span className="block text-xs text-gray-600 mb-1">中央マージン（mm）</span>
+                      <span className="block text-xs text-gray-600 mb-1">中央マージン</span>
                       <div className="grid grid-cols-[auto_auto_1fr] items-center gap-2 min-w-0">
                         <input
                           type="checkbox"
@@ -1053,29 +1503,29 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
                           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
                         <span className="text-xs text-gray-600">あり</span>
-                        <input
-                          type="number"
-                          className="w-full min-w-0 rounded-lg border-gray-300 border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
-                          value={Number.isFinite(centerMargin) ? centerMargin : 0}
-                          onChange={(e) => setCenterMargin(Number(e.target.value))}
-                          min={0}
-                          step={0.1}
-                          disabled={!centerMarginEnabled}
-                        />
+                        <div className="min-w-0">
+                          <input
+                            type="number"
+                            className="w-full min-w-0 rounded-lg border-gray-300 border px-3 py-2 text-sm tabular-nums text-right focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                            value={Number.isFinite(centerMargin) ? centerMargin : 0}
+                            onChange={(e) => setCenterMargin(Number(e.target.value))}
+                            min={0}
+                            step={0.1}
+                            disabled={!centerMarginEnabled}
+                          />
+                        </div>
                       </div>
                     </label>
                   </div>
-                </div>
-              </div>
+                </div></section>
 
 {/* 配置方向 / 紙の目 */}
-<div>
-  <span className="block text-sm font-medium text-gray-700 mb-2">配置方向 / 紙の目</span>
-  <div className="flex flex-wrap items-center gap-2">
-    {/* 配置方向 */}
-    <div className="flex gap-2">
+<section aria-labelledby="orientation-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
+  <h2 id="orientation-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">配置方向 / 紙の目（断裁後の目：{effectiveGrain === "T" ? "T目" : "Y目"}）</h2>
+  <div className="flex flex-nowrap items-center gap-2">
+    <div className="flex flex-nowrap gap-2">
       <button
-        className={`px-4 py-2 rounded-lg border font-medium text-sm transition-colors ${
+        className={`px-2 sm:px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
           placeOrientation === "portrait"
             ? "bg-blue-600 text-white border-blue-600"
             : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
@@ -1085,7 +1535,7 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
         縦置き
       </button>
       <button
-        className={`px-4 py-2 rounded-lg border font-medium text-sm transition-colors ${
+        className={`px-2 sm:px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
           placeOrientation === "landscape"
             ? "bg-blue-600 text-white border-blue-600"
             : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
@@ -1095,14 +1545,10 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
         横置き
       </button>
     </div>
-
-    {/* 仕切り */}
-    <span className="mx-2 text-gray-300">|</span>
-
-    {/* 紙の目（全判T目 / 全判Y目） */}
-    <div className="flex gap-2">
+    <div className="w-px h-6 bg-gray-300" aria-hidden="true"></div>
+    <div className="flex flex-nowrap gap-2">
       <button
-        className={`px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
+        className={`px-1.5 sm:px-2 py-2 rounded-lg border font-medium text-sm transition-colors ${
           grain === "T"
             ? "bg-sky-600 text-white border-sky-600"
             : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
@@ -1112,7 +1558,7 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
         全判T目
       </button>
       <button
-        className={`px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
+        className={`px-1.5 sm:px-2 py-2 rounded-lg border font-medium text-sm transition-colors ${
           grain === "Y"
             ? "bg-sky-600 text-white border-sky-600"
             : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
@@ -1122,12 +1568,8 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
         全判Y目
       </button>
     </div>
-    {/* 現在の目表示 */}
-    <span className="ml-3 text-sm text-gray-700">
-      断裁後の目：{effectiveGrain === "T" ? "T目" : "Y目"}
-    </span>
   </div>
-</div>
+</section>
 
             </div>
 
@@ -1135,14 +1577,41 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
             <LayoutStats layout={layout} paperW={paperW} paperH={paperH} />
 
             {/* プレビューエリア */}
-<div className="border rounded-lg overflow-hidden bg-gray-50">
-  <div
-    ref={wrapperRef}
-    className="w-full p-4"
-  >
-    <canvas ref={canvasRef} className="max-w-full border shadow-sm" style={{ display: 'block' }} />
-  </div>
-</div>
+            {/* Fullscreen overlay */}
+            {isFullscreen && (
+              <div
+                className="fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center aspect-square"
+                onClick={() => setIsFullscreen(false)}
+                style={{ cursor: 'zoom-out' }}
+              >
+                <canvas ref={canvasRef} />
+              </div>
+            )}
+            {/* Normal preview area, clickable for fullscreen */}
+            <div
+              className="overflow-hidden"
+              onClick={() => setIsFullscreen(true)}
+              style={{ cursor: 'zoom-in' }}
+            >
+              <div
+                ref={wrapperRef}
+                className="p-0 overflow-hidden w-full"
+              >
+                {!isFullscreen && (
+                   <canvas ref={canvasRef} className="border w-full h-auto aspect-square" style={{ display: 'block' }} />
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end mt-3">
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 active:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onClick={(e) => { e.stopPropagation(); handleSavePNG(3000); }}
+                title="プレビューをPNGで保存"
+              >
+                画像として保存
+              </button>
+            </div>
           </div>
         </div>
       );
