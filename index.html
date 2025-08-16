@@ -1149,13 +1149,22 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
           ctx.lineTo(targetWidthPx, targetHeightPx + 0.5);
           ctx.stroke();
           // テキスト（左右中央揃え・プリセット名対応）
+          const grainLabel = (grain === 'T') ? 'T目' : 'Y目'; // 全判での目（flip適用前）
           const paperLabel = (!customMode && currentBase && currentCut)
-            ? `${currentBase.name_label} ${currentCut.cut_label}（${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ）`
+            ? `${currentBase.name_label} ${currentCut.cut_label}（${grainLabel} ${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ）`
             : `${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ`;
           const paperText = `紙サイズ: ${paperLabel}`;
           const trimText  = `製品仕上がりサイズ: ${layout.trimW.toFixed(1)}×${layout.trimH.toFixed(1)}ミリ`;
           const countText = `面付け数: ${layout.positions.length}面`;
-          const infoLine = `${paperText}　　${trimText}　　${countText}`; // 全角スペースで区切り
+          // マージン情報（面付け数の後に：咥え, 咥え尻 → 次に 左右アキ → 次に 中央アキ(有効時のみ)）
+          const gripText = `咥え: ${gripMargin.toFixed(1)}mm`;
+          const tailText = `咥え尻: ${tailMargin.toFixed(1)}mm`;
+          const gripTailText = `${gripText}、${tailText}`;
+          const lrText = `左右アキ: ${leftRightMargin.toFixed(1)}mm`;
+          const centerText = centerMarginEnabled ? `中央アキ: ${centerMargin.toFixed(1)}mm` : null;
+          const parts = [paperText, trimText, countText, gripTailText, lrText];
+          if (centerText) parts.push(centerText);
+          const infoLine = parts.join('　　'); // 全角スペース区切り
           ctx.fillStyle = '#111827';
           ctx.font = '14px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
           ctx.textBaseline = 'middle';
@@ -1255,10 +1264,13 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
             const sizeChanged = Math.abs(cssW - lastSize.cssW) >= 0.5 || Math.abs(cssH - lastSize.cssH) >= 0.5;
             lastSize.cssW = cssW; lastSize.cssH = cssH;
 
-            const dpr = window.devicePixelRatio || 1;
-            canvas.style.width = `${cssW}px`;
-            canvas.style.height = `${cssH}px`;
+            const qualityFactor = 2; // 1.0 = 標準, 2.0 = 高精細
+            const dpr = (window.devicePixelRatio || 1) * qualityFactor;
+            // 先にアスペクト比を確定し、幅→高さの順で一度だけ反映（maxWidthで親幅超過も防止）
             canvas.style.aspectRatio = `${contentW} / ${contentH}`;
+            canvas.style.width = `${cssW}px`;
+            canvas.style.maxWidth = '100%';
+            canvas.style.height = `${cssH}px`;
             const bufferW = Math.ceil(cssW * dpr);
             const bufferH = Math.ceil(cssH * dpr);
             canvas.width = bufferW; canvas.height = bufferH;
@@ -1343,12 +1355,19 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
           });
         };
 
-        const resizeObserver = new ResizeObserver(() => {
+        // ResizeObserver: wrapper の「幅」変化にのみ反応（高さだけの変化は無視してループ防止）
+        let lastObservedWidth = -1;
+        const resizeObserver = new ResizeObserver((entries) => {
+          const entry = entries && entries[0];
+          const cr = entry && entry.contentRect;
+          const w = Math.round((cr && cr.width) || (wrapper ? wrapper.clientWidth : 0) || 0);
+          if (w <= 0) return;
+          if (w === lastObservedWidth) return; // 高さのみの変化は無視
+          lastObservedWidth = w;
           computeAndSetScale();
           scheduleRedraw();
         });
         if (!isFullscreen && wrapper) {
-          // 通常時は wrapper のサイズ変化だけを見る
           resizeObserver.observe(wrapper);
         }
         // FS時のみウインドウリサイズを監視（通常時はROに任せる）
@@ -1384,6 +1403,7 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
           <div className="mx-auto max-w-7xl p-3 space-y-6">
 
             <div className="space-y-4">
+              <div className="grid gap-4 min-[1000px]:grid-cols-2">
               {/* プリセット選択と用紙サイズ */}
               <section aria-labelledby="paper-size-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
                 <h2 id="paper-size-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">用紙サイズ（mm）</h2>
@@ -1453,14 +1473,16 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
                 <div className="grid grid-cols-3 gap-4">
                   <NumberInput label="タテ" value={prodTrimW} onChange={setProdTrimW} min={1} step={0.5} />
                   <NumberInput label="ヨコ" value={prodTrimH} onChange={setProdTrimH} min={1} step={0.5} />
-                  <NumberInput label="裁ち落とし" value={bleedEachSide} onChange={setBleedEachSide} min={0} step={0.1} />
+                  <NumberInput label="裁ち落とし" value={bleedEachSide} onChange={setBleedEachSide} min={0} step={1} />
                 </div>
               </section>
+              </div>
+              <div className="grid gap-4 min-[1000px]:grid-cols-2">
 
               {/* マージン設定 */}
               <section aria-labelledby="margin-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
                 <h2 id="margin-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">マージン設定（mm）</h2>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-4 grid-cols-2 min-[500px]:grid-cols-4">
                   <div className="min-w-0">
                     <NumberInput label="咥え" value={gripMargin} onChange={setGripMargin} min={0} step={0.5} />
                   </div>
@@ -1519,57 +1541,58 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
                   </div>
                 </div></section>
 
-{/* 配置方向 / 紙の目 */}
-<section aria-labelledby="orientation-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
-  <h2 id="orientation-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">配置方向 / 紙の目（断裁後の目：{effectiveGrain === "T" ? "T目" : "Y目"}）</h2>
-  <div className="flex flex-nowrap items-center gap-2">
-    <div className="flex flex-nowrap gap-2">
-      <button
-        className={`px-2 sm:px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
-          placeOrientation === "portrait"
-            ? "bg-blue-600 text-white border-blue-600"
-            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-        }`}
-        onClick={() => setPlaceOrientation("portrait")}
-      >
-        縦置き
-      </button>
-      <button
-        className={`px-2 sm:px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
-          placeOrientation === "landscape"
-            ? "bg-blue-600 text-white border-blue-600"
-            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-        }`}
-        onClick={() => setPlaceOrientation("landscape")}
-      >
-        横置き
-      </button>
-    </div>
-    <div className="w-px h-6 bg-gray-300" aria-hidden="true"></div>
-    <div className="flex flex-nowrap gap-2">
-      <button
-        className={`px-1.5 sm:px-2 py-2 rounded-lg border font-medium text-sm transition-colors ${
-          grain === "T"
-            ? "bg-sky-600 text-white border-sky-600"
-            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-        }`}
-        onClick={() => setGrain("T")}
-      >
-        全判T目
-      </button>
-      <button
-        className={`px-1.5 sm:px-2 py-2 rounded-lg border font-medium text-sm transition-colors ${
-          grain === "Y"
-            ? "bg-sky-600 text-white border-sky-600"
-            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-        }`}
-        onClick={() => setGrain("Y")}
-      >
-        全判Y目
-      </button>
-    </div>
-  </div>
-</section>
+              {/* 配置方向 / 紙の目 */}
+              <section aria-labelledby="orientation-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
+                <h2 id="orientation-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">配置方向 / 紙の目（断裁後の目：{effectiveGrain === "T" ? "T目" : "Y目"}）</h2>
+                <div className="flex flex-nowrap items-center gap-2">
+                  <div className="flex flex-nowrap gap-2">
+                    <button
+                      className={`px-2 sm:px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
+                        placeOrientation === "portrait"
+                          ? "bg-blue-600 text-white border-blue-600"
+                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                      }`}
+                      onClick={() => setPlaceOrientation("portrait")}
+                    >
+                      縦置き
+                    </button>
+                    <button
+                      className={`px-2 sm:px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
+                        placeOrientation === "landscape"
+                          ? "bg-blue-600 text-white border-blue-600"
+                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                      }`}
+                      onClick={() => setPlaceOrientation("landscape")}
+                    >
+                      横置き
+                    </button>
+                  </div>
+                  <div className="w-px h-6 bg-gray-300" aria-hidden="true"></div>
+                  <div className="flex flex-nowrap gap-2">
+                    <button
+                      className={`px-1.5 sm:px-2 py-2 rounded-lg border font-medium text-sm transition-colors ${
+                        grain === "T"
+                          ? "bg-sky-600 text-white border-sky-600"
+                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                      }`}
+                      onClick={() => setGrain("T")}
+                    >
+                      全判T目
+                    </button>
+                    <button
+                      className={`px-1.5 sm:px-2 py-2 rounded-lg border font-medium text-sm transition-colors ${
+                        grain === "Y"
+                          ? "bg-sky-600 text-white border-sky-600"
+                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                      }`}
+                      onClick={() => setGrain("Y")}
+                    >
+                      全判Y目
+                    </button>
+                  </div>
+                </div>
+              </section>
+              </div>
 
             </div>
 
@@ -1580,11 +1603,11 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
             {/* Fullscreen overlay */}
             {isFullscreen && (
               <div
-                className="fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center aspect-square"
+                className="fixed inset-0 z-50 flex items-center justify-center"
                 onClick={() => setIsFullscreen(false)}
-                style={{ cursor: 'zoom-out' }}
+                style={{ cursor: 'zoom-out', background: 'transparent' }}
               >
-                <canvas ref={canvasRef} />
+                <canvas ref={canvasRef} className="block" />
               </div>
             )}
             {/* Normal preview area, clickable for fullscreen */}
