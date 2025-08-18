@@ -1064,7 +1064,7 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
           const contentH = mm2px(paperH) + padding * 2;
           const scaleExport = targetWidthPx / contentW;
           const targetHeightPx = Math.max(1, Math.round(contentH * scaleExport));
-          const footerHeightPx = 48; // フッター情報エリアの高さ(px)
+          const footerHeightPx = 48; // 1行表示
 
           // オフスクリーンキャンバス（フッターぶんを追加）
           const off = document.createElement('canvas');
@@ -1156,18 +1156,17 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
             ? `${currentBase.name_label} ${currentCut.cut_label}（${grainLabel} ${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ）`
             : `${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ`;
           const paperText = `紙サイズ: ${paperLabel}`;
-          const trimText  = `製品仕上がりサイズ: ${layout.trimW.toFixed(1)}×${layout.trimH.toFixed(1)}ミリ`;
-          const bleedText = `裁ち落とし: ${bleedEachSide.toFixed(1)}mm`;
+          const trimText  = `製品仕上がりサイズ: ${layout.trimW.toFixed(1)}×${layout.trimH.toFixed(1)}ミリ　裁ち落とし: ${bleedEachSide.toFixed(1)}mm`;
           const countText = `面付け数: ${layout.positions.length}面`;
-          // マージン情報（面付け数の後に：咥え, 咥え尻 → 次に 左右アキ → 次に 中央アキ(有効時のみ)）
           const gripText = `咥え: ${gripMargin.toFixed(1)}mm`;
           const tailText = `咥え尻: ${tailMargin.toFixed(1)}mm`;
           const gripTailText = `${gripText}、${tailText}`;
           const lrText = `左右アキ: ${leftRightMargin.toFixed(1)}mm`;
           const centerText = centerMarginEnabled ? `中央アキ: ${centerMargin.toFixed(1)}mm` : null;
-          const parts = [paperText, trimText, bleedText, countText, gripTailText, lrText];
+          const parts = [paperText, trimText, countText, gripTailText, lrText];
           if (centerText) parts.push(centerText);
           const infoLine = parts.join('　　'); // 全角スペース区切り
+
           ctx.fillStyle = '#111827';
           ctx.font = '14px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
           ctx.textBaseline = 'middle';
