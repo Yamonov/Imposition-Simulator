@@ -1157,6 +1157,7 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
             : `${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ`;
           const paperText = `紙サイズ: ${paperLabel}`;
           const trimText  = `製品仕上がりサイズ: ${layout.trimW.toFixed(1)}×${layout.trimH.toFixed(1)}ミリ`;
+          const bleedText = `裁ち落とし: ${bleedEachSide.toFixed(1)}mm`;
           const countText = `面付け数: ${layout.positions.length}面`;
           // マージン情報（面付け数の後に：咥え, 咥え尻 → 次に 左右アキ → 次に 中央アキ(有効時のみ)）
           const gripText = `咥え: ${gripMargin.toFixed(1)}mm`;
@@ -1164,7 +1165,7 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
           const gripTailText = `${gripText}、${tailText}`;
           const lrText = `左右アキ: ${leftRightMargin.toFixed(1)}mm`;
           const centerText = centerMarginEnabled ? `中央アキ: ${centerMargin.toFixed(1)}mm` : null;
-          const parts = [paperText, trimText, countText, gripTailText, lrText];
+          const parts = [paperText, trimText, bleedText, countText, gripTailText, lrText];
           if (centerText) parts.push(centerText);
           const infoLine = parts.join('　　'); // 全角スペース区切り
           ctx.fillStyle = '#111827';
