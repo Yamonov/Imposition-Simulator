@@ -1,0 +1,1678 @@
+import React, { useMemo, useRef, useEffect, useState } from 'react';
+
+    // 入力欄が編集可能か判定
+    function isEditableField(el) {
+      if (!el || el.disabled || el.readOnly) return false;
+      if (el.tagName === 'TEXTAREA') return true;
+      if (el.tagName === 'INPUT') {
+        const t = (el.type || '').toLowerCase();
+        return t === 'text' || t === 'number' || t === 'search' || t === 'email' || t === 'url';
+      }
+      if (el.tagName === 'SELECT') return true;
+      return false;
+    }
+    // フォーカス可能な入力欄リストを取得
+    function getFocusableList(root) {
+      if (!root) return [];
+      const sel = [
+        'input:not([disabled]):not([type="hidden"])',
+        'select:not([disabled])',
+        'textarea:not([disabled])'
+      ].join(',');
+      return Array.from(root.querySelectorAll(sel)).filter(el => !el.readOnly);
+    }
+
+    // 次の入力欄にフォーカス
+    function focusNextField(current, root = document.getElementById('root')) {
+      const list = getFocusableList(root);
+      const idx = list.indexOf(current);
+      if (idx === -1) return;
+      for (let i = idx + 1; i < list.length; i++) {
+        const el = list[i];
+        if (isEditableField(el)) {
+          el.focus();
+          if (el.tagName === 'INPUT') {
+            try { el.select(); } catch (_) {}
+          }
+          return;
+        }
+      }
+    }
+
+    // 1mmあたりのpx値を測定
+    function measurePxPerMm() {
+      const probe = document.createElement("div");
+      probe.style.width = "1in";
+      probe.style.position = "absolute";
+      probe.style.visibility = "hidden";
+      document.body.appendChild(probe);
+      const cssPPI = probe.getBoundingClientRect().width;
+      document.body.removeChild(probe);
+      const pxPerMm = cssPPI / 25.4;
+      return Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 96 / 25.4;
+    }
+
+    // 面付け位置をグループ化
+    function groupPositions(positions) {
+      if (positions.length === 0) return [];
+      const leftPositions = positions.filter(p => p.area === 'left');
+      const rightPositions = positions.filter(p => p.area === 'right');
+      const singlePositions = positions.filter(p => p.area === 'single');
+      const groups = [];
+      if (leftPositions.length > 0) groups.push(leftPositions);
+      if (rightPositions.length > 0) groups.push(rightPositions);
+      if (singlePositions.length > 0) groups.push(singlePositions);
+      return groups;
+    }
+
+    // グループの外接矩形を計算
+    function calculateGroupBounds(group, boundType = 'bleed') {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      group.forEach(pos => {
+        const rect = boundType === 'trim' ? pos.trim : pos.bleed;
+        const { x, y, w, h } = rect;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x + w);
+        maxY = Math.max(maxY, y + h);
+      });
+      return { minX, minY, maxX, maxY };
+    }
+
+    // 製品間の境界線を検出（0.001mm単位でFP誤差回避）
+    function findBoundaries(group) {
+      const boundaries = [];
+      const positions = group.map(p => p.trim);
+      if (positions.length <= 1) return boundaries;
+      const key = (mm) => Math.round(mm * 1000);
+      const vMap = new Map();
+      for (const pos of positions) {
+        const L = key(pos.x);
+        const R = key(pos.x + pos.w);
+        if (!vMap.has(L)) vMap.set(L, { left: [], right: [] });
+        if (!vMap.has(R)) vMap.set(R, { left: [], right: [] });
+        vMap.get(L).right.push(pos);
+        vMap.get(R).left.push(pos);
+      }
+      for (const [kx, lr] of vMap.entries()) {
+        if (lr.left.length > 0 && lr.right.length > 0) {
+          const all = lr.left.concat(lr.right);
+          const minY = Math.min(...all.map(p => p.y));
+          const maxY = Math.max(...all.map(p => p.y + p.h));
+          boundaries.push({ type: 'vertical', position: kx / 1000, start: minY, end: maxY });
+        }
+      }
+      const hMap = new Map();
+      for (const pos of positions) {
+        const T = key(pos.y);
+        const B = key(pos.y + pos.h);
+        if (!hMap.has(T)) hMap.set(T, { top: [], bottom: [] });
+        if (!hMap.has(B)) hMap.set(B, { top: [], bottom: [] });
+        hMap.get(T).bottom.push(pos);
+        hMap.get(B).top.push(pos);
+      }
+      for (const [ky, tb] of hMap.entries()) {
+        if (tb.top.length > 0 && tb.bottom.length > 0) {
+          const all = tb.top.concat(tb.bottom);
+          const minX = Math.min(...all.map(p => p.x));
+          const maxX = Math.max(...all.map(p => p.x + p.w));
+          boundaries.push({ type: 'horizontal', position: ky / 1000, start: minX, end: maxX });
+        }
+      }
+      return boundaries;
+    }
+
+    // 行・列ごとに隣り合う仕上がりのシーム座標を抽出
+    function computeSeams(group) {
+      const trims = group.map(p => p.trim);
+      const nMm = Math.abs(group[0].trim.x - group[0].bleed.x);
+      const key = v => Math.round(v * 1000);
+      const rows = new Map();
+      for (const r of trims) {
+        const ky = key(r.y);
+        if (!rows.has(ky)) rows.set(ky, []);
+        rows.get(ky).push(r);
+      }
+      const verticalStarts = [];
+      for (const arr of rows.values()) {
+        arr.sort((a, b) => a.x - b.x);
+        for (let i = 0; i < arr.length - 1; i++) {
+          const left = arr[i];
+          verticalStarts.push(left.x + left.w);
+        }
+      }
+      const cols = new Map();
+      for (const r of trims) {
+        const kx = key(r.x);
+        if (!cols.has(kx)) cols.set(kx, []);
+        cols.get(kx).push(r);
+      }
+      const horizontalStarts = [];
+      for (const arr of cols.values()) {
+        arr.sort((a, b) => a.y - b.y);
+        for (let i = 0; i < arr.length - 1; i++) {
+          const top = arr[i];
+          horizontalStarts.push(top.y + top.h);
+        }
+      }
+      const uniq = (vals) => {
+        const s = new Set();
+        const out = [];
+        for (const v of vals) {
+          const k = key(v);
+          if (s.has(k)) continue;
+          s.add(k);
+          out.push(v);
+        }
+        return out;
+      };
+      return {
+        nMm,
+        verticalStarts: uniq(verticalStarts),
+        horizontalStarts: uniq(horizontalStarts),
+      };
+    }
+// 紙の目プレビュー（mm座標）
+// mode: "T" => 10mm間隔の水平線（上→下）
+//       "Y" => 10mm間隔の垂直線（左→右）
+function drawPaperGrain(ctx, paperW, paperH, mode) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(37, 99, 235, 0.3)"; // 薄い青・20%
+  ctx.lineWidth = 0.5; // mmの細線
+
+  if (mode === "T") {
+    for (let y = 0; y <= paperH; y += 10) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(paperW, y);
+      ctx.stroke();
+    }
+  } else { // "Y"
+    for (let x = 0; x <= paperW; x += 10) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, paperH);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+    // 日本式ダブルトンボ一式の描画 ------------------------------------------------
+    function drawRegistrationMarks(ctx, layout) {
+      ctx.save();
+      const TOMBO_LENGTH_MM = 12.7; // mm
+      const OUTSIDE_MM = 9;         // 外側へ常に 9mm
+      const MARK_LW_MM = 0.4;       // およそ 1.5px 相当
+
+      const { positions } = layout;
+      if (!positions.length) {
+        ctx.restore();
+        return;
+      }
+
+      const groups = groupPositions(positions);
+      const bleedEachSideMm = (layout.bleedW - layout.trimW) / 2;
+
+      ctx.lineWidth = MARK_LW_MM;
+      ctx.strokeStyle = '#111827';
+
+      for (const group of groups) {
+        drawJapaneseCornerMarks(ctx, group, TOMBO_LENGTH_MM, OUTSIDE_MM, bleedEachSideMm);
+        drawCenterMarks(ctx, group, TOMBO_LENGTH_MM);
+        drawPerimeterMarks(ctx, group, TOMBO_LENGTH_MM);
+        // ブルズアイ（十字＋円）マーク
+        drawBullseyeMarks(ctx, group, MARK_LW_MM);
+      }
+      ctx.restore();
+    }
+
+    function drawJapaneseCornerMarks(ctx, group, tomboLenMm, outMm, bleedEachSideMm) {
+      if (!group.length) return;
+      const t = calculateGroupBounds(group, 'trim');
+
+      // 仕上がり角(tx,ty)は mm のまま
+      drawJapaneseCornerMark(ctx, 'top-left',     t.minX, t.minY, bleedEachSideMm, outMm, tomboLenMm);
+      drawJapaneseCornerMark(ctx, 'top-right',    t.maxX, t.minY, bleedEachSideMm, outMm, tomboLenMm);
+      drawJapaneseCornerMark(ctx, 'bottom-left',  t.minX, t.maxY, bleedEachSideMm, outMm, tomboLenMm);
+      drawJapaneseCornerMark(ctx, 'bottom-right', t.maxX, t.maxY, bleedEachSideMm, outMm, tomboLenMm);
+    }
+
+    function drawJapaneseCornerMark(ctx, pos, tx, ty, nMm, outMm, tomboLenMm) {
+      const n = nMm, out = outMm;
+      ctx.lineCap = 'butt';
+
+      // 黒（仕上がり基準）
+      ctx.beginPath();
+      switch (pos) {
+        case 'top-left':
+          ctx.moveTo(tx - n - out, ty - n); ctx.lineTo(tx, ty - n);       // 横（左へ）
+          ctx.moveTo(tx, ty - n);          ctx.lineTo(tx, ty - n - out);  // 縦（上へ）
+          break;
+        case 'top-right':
+          ctx.moveTo(tx, ty - n);          ctx.lineTo(tx + n + out, ty - n);
+          ctx.moveTo(tx, ty - n);          ctx.lineTo(tx, ty - n - out);
+          break;
+        case 'bottom-left':
+          ctx.moveTo(tx - n - out, ty);    ctx.lineTo(tx - n, ty);
+          ctx.moveTo(tx - n, ty);          ctx.lineTo(tx - n, ty + n + out);
+          break;
+        case 'bottom-right':
+          ctx.moveTo(tx + n, ty);          ctx.lineTo(tx + n + out, ty);
+          ctx.moveTo(tx + n, ty);          ctx.lineTo(tx + n, ty + n + out);
+          break;
+      }
+      ctx.stroke();
+
+      // 赤（=断ち落とし基準だが色は黒指定に統一済み）
+      ctx.beginPath();
+      switch (pos) {
+        case 'top-left':
+          ctx.moveTo(tx - n - out, ty);    ctx.lineTo(tx - n, ty);
+          ctx.moveTo(tx - n, ty);          ctx.lineTo(tx - n, ty - (n + out));
+          break;
+        case 'top-right':
+          ctx.moveTo(tx + n, ty);          ctx.lineTo(tx + n + out, ty);
+          ctx.moveTo(tx + n, ty);          ctx.lineTo(tx + n, ty - (n + out));
+          break;
+        case 'bottom-left':
+          ctx.moveTo(tx, ty + n);          ctx.lineTo(tx - (n + out), ty + n);
+          ctx.moveTo(tx, ty + n);          ctx.lineTo(tx, ty + n + out);
+          break;
+        case 'bottom-right':
+          ctx.moveTo(tx, ty + n);          ctx.lineTo(tx + (n + out), ty + n);
+          ctx.moveTo(tx, ty + n);          ctx.lineTo(tx, ty + n + out);
+          break;
+      }
+      ctx.stroke();
+    }
+
+    // 3本線（中央マーク：両側）
+    function drawThreeEqualLines(ctx, centerX, centerY, halfLengthPx, direction, mm2px, spacingMm = 3) {
+      const spacing = mm2px(spacingMm);
+      ctx.beginPath();
+      if (direction === 'vertical') {
+        ctx.moveTo(centerX,           centerY - halfLengthPx);
+        ctx.lineTo(centerX,           centerY + halfLengthPx);
+        ctx.moveTo(centerX - spacing, centerY - halfLengthPx);
+        ctx.lineTo(centerX - spacing, centerY + halfLengthPx);
+        ctx.moveTo(centerX + spacing, centerY - halfLengthPx);
+        ctx.lineTo(centerX + spacing, centerY + halfLengthPx);
+      } else {
+        ctx.moveTo(centerX - halfLengthPx, centerY);
+        ctx.lineTo(centerX + halfLengthPx, centerY);
+        ctx.moveTo(centerX - halfLengthPx, centerY - spacing);
+        ctx.lineTo(centerX + halfLengthPx, centerY - spacing);
+        ctx.moveTo(centerX - halfLengthPx, centerY + spacing);
+        ctx.lineTo(centerX + halfLengthPx, centerY + spacing);
+      }
+      ctx.stroke();
+    }
+
+    // 3本線（外周：中心±間隔）
+    function drawThreeTicksCentered(ctx, centerX, centerY, lengthPx, side, spacingPx) {
+      const s = spacingPx;
+      // keep style from caller; use round caps for visibility
+      const prevCap = ctx.lineCap;
+      ctx.lineCap = 'round';
+
+      const seg = (x1, y1, x2, y2) => {
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      };
+
+      switch (side) {
+        case 'top': // outward: -y
+          // 中央
+          seg(centerX,       centerY,       centerX,       centerY - lengthPx);
+          // 左右±n
+          seg(centerX - s,   centerY,       centerX - s,   centerY - lengthPx);
+          seg(centerX + s,   centerY,       centerX + s,   centerY - lengthPx);
+          break;
+        case 'bottom': // outward: +y
+          seg(centerX,       centerY,       centerX,       centerY + lengthPx);
+          seg(centerX - s,   centerY,       centerX - s,   centerY + lengthPx);
+          seg(centerX + s,   centerY,       centerX + s,   centerY + lengthPx);
+          break;
+        case 'left': // outward: -x
+          seg(centerX,       centerY,       centerX - lengthPx, centerY);
+          seg(centerX,       centerY - s,   centerX - lengthPx, centerY - s);
+          seg(centerX,       centerY + s,   centerX - lengthPx, centerY + s);
+          break;
+        case 'right': // outward: +x
+          seg(centerX,       centerY,       centerX + lengthPx, centerY);
+          seg(centerX,       centerY - s,   centerX + lengthPx, centerY - s);
+          seg(centerX,       centerY + s,   centerX + lengthPx, centerY + s);
+          break;
+      }
+
+      ctx.lineCap = prevCap;
+    }
+
+    // 3本線（中央マーク：一方向のみ）: 端に寄せた三本線
+    function drawThreeOneSidedTicks(ctx, centerX, centerY, lengthPx, side, spacingPx, dir) {
+      // dir: +1 or -1 — offset direction along the edge's tangent toward the nearest outer corner
+      const d = spacingPx * (dir || 1);
+      ctx.beginPath();
+      switch (side) {
+        case 'top': { // outward = negative y
+          // x positions: base, base+d, base+2d
+          ctx.moveTo(centerX,     centerY); ctx.lineTo(centerX,     centerY - lengthPx);
+          ctx.moveTo(centerX + d, centerY); ctx.lineTo(centerX + d, centerY - lengthPx);
+          ctx.moveTo(centerX + 2*d, centerY); ctx.lineTo(centerX + 2*d, centerY - lengthPx);
+          break;
+        }
+        case 'bottom': { // outward = positive y
+          ctx.moveTo(centerX,     centerY); ctx.lineTo(centerX,     centerY + lengthPx);
+          ctx.moveTo(centerX + d, centerY); ctx.lineTo(centerX + d, centerY + lengthPx);
+          ctx.moveTo(centerX + 2*d, centerY); ctx.lineTo(centerX + 2*d, centerY + lengthPx);
+          break;
+        }
+        case 'left': { // outward = negative x
+          // y positions: base, base+d, base+2d
+          ctx.moveTo(centerX, centerY);           ctx.lineTo(centerX - lengthPx, centerY);
+          ctx.moveTo(centerX, centerY + d);       ctx.lineTo(centerX - lengthPx, centerY + d);
+          ctx.moveTo(centerX, centerY + 2*d);     ctx.lineTo(centerX - lengthPx, centerY + 2*d);
+          break;
+        }
+        case 'right': { // outward = positive x
+          ctx.moveTo(centerX, centerY);           ctx.lineTo(centerX + lengthPx, centerY);
+          ctx.moveTo(centerX, centerY + d);       ctx.lineTo(centerX + lengthPx, centerY + d);
+          ctx.moveTo(centerX, centerY + 2*d);     ctx.lineTo(centerX + lengthPx, centerY + 2*d);
+          break;
+        }
+      }
+      ctx.stroke();
+    }
+
+    function drawCenterMarks(ctx, group, tomboLengthMm) {
+      const tickLen = tomboLengthMm / 2;     // 端に出す短線の長さ [mm]
+      ctx.strokeStyle = '#1e40af';
+      ctx.lineWidth = 0.45;                  // 約 1.7px 相当
+      ctx.lineCap = 'round';
+
+      const nMm = Math.abs(group[0].trim.x - group[0].bleed.x); // 断ち落とし量 [mm]
+
+      const tB = calculateGroupBounds(group, 'trim');
+      const bB = calculateGroupBounds(group, 'bleed');
+      const boundaries = findBoundaries(group);
+
+      const uniq = (vals) => {
+        const s = new Set();
+        return vals.filter(v => { const k = Math.round(v * 1000); if (s.has(k)) return false; s.add(k); return true; });
+      };
+
+      // 垂直継ぎ目 → 上端/下端に3本（中央±n）
+      {
+        const xs = uniq(boundaries.filter(b => b.type === 'vertical').map(b => b.position)
+          .filter(x => x > tB.minX && x < tB.maxX));
+        for (const x of xs) {
+          // TOP
+          ctx.beginPath();
+          ctx.moveTo(x,           bB.minY); ctx.lineTo(x,           bB.minY - tickLen);
+          ctx.moveTo(x - nMm,     bB.minY); ctx.lineTo(x - nMm,     bB.minY - tickLen);
+          ctx.moveTo(x + nMm,     bB.minY); ctx.lineTo(x + nMm,     bB.minY - tickLen);
+          ctx.stroke();
+          // BOTTOM
+          ctx.beginPath();
+          ctx.moveTo(x,           bB.maxY); ctx.lineTo(x,           bB.maxY + tickLen);
+          ctx.moveTo(x - nMm,     bB.maxY); ctx.lineTo(x - nMm,     bB.maxY + tickLen);
+          ctx.moveTo(x + nMm,     bB.maxY); ctx.lineTo(x + nMm,     bB.maxY + tickLen);
+          ctx.stroke();
+        }
+      }
+
+      // 水平継ぎ目 → 左端/右端に3本
+      {
+        const ys = uniq(boundaries.filter(b => b.type === 'horizontal').map(b => b.position)
+          .filter(y => y > tB.minY && y < tB.maxY));
+        for (const y of ys) {
+          // LEFT
+          ctx.beginPath();
+          ctx.moveTo(bB.minX, y); ctx.lineTo(bB.minX - tickLen, y);
+          ctx.moveTo(bB.minX, y - nMm); ctx.lineTo(bB.minX - tickLen, y - nMm);
+          ctx.moveTo(bB.minX, y + nMm); ctx.lineTo(bB.minX - tickLen, y + nMm);
+          ctx.stroke();
+          // RIGHT
+          ctx.beginPath();
+          ctx.moveTo(bB.maxX, y); ctx.lineTo(bB.maxX + tickLen, y);
+          ctx.moveTo(bB.maxX, y - nMm); ctx.lineTo(bB.maxX + tickLen, y - nMm);
+          ctx.moveTo(bB.maxX, y + nMm); ctx.lineTo(bB.maxX + tickLen, y + nMm);
+          ctx.stroke();
+        }
+      }
+    }
+
+
+    // 3本線（外周：仕上がり・断ち落とし・仕上がり、外周エッジのみ）
+    function drawPerimeterMarks(ctx, group, tomboLengthMm) {
+      if (!group.length) return;
+
+      const { nMm, verticalStarts, horizontalStarts } = computeSeams(group);
+      const tB = calculateGroupBounds(group, 'trim');
+      const bB = calculateGroupBounds(group, 'bleed');
+
+      // 外周エッジだけに描く
+      const topY    = bB.minY;
+      const bottomY = bB.maxY;
+      const leftX   = bB.minX;
+      const rightX  = bB.maxX;
+
+      const tickLen = tomboLengthMm / 2; // 外側へ出す長さ
+      const seg = (x1,y1,x2,y2) => { ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); };
+
+      ctx.save();
+      ctx.strokeStyle = '#1e40af';
+      ctx.lineWidth = 0.5;       // 0.5mm
+      ctx.lineCap = 'round';
+
+      // --- 縦シーム → 上端/下端に「trim–bleed–trim」の3本
+      for (const x0 of verticalStarts) {
+        // 3本のX（左trim / 中央bleed / 右trim）
+        const xTrimL = x0;          // left trim の右端
+        const xBleed = x0 + nMm;    // 断ち落とし中央
+        const xTrimR = x0 + 2*nMm;  // 右側製品の左trim
+        // Top（外＝上）
+        seg(xTrimL, topY, xTrimL, topY - tickLen);
+        seg(xBleed, topY, xBleed, topY - tickLen);
+        seg(xTrimR, topY, xTrimR, topY - tickLen);
+        // Bottom（外＝下）
+        seg(xTrimL, bottomY, xTrimL, bottomY + tickLen);
+        seg(xBleed, bottomY, xBleed, bottomY + tickLen);
+        seg(xTrimR, bottomY, xTrimR, bottomY + tickLen);
+      }
+
+      // --- 横シーム → 左端/右端に「trim–bleed–trim」の3本
+      for (const y0 of horizontalStarts) {
+        const yTrimT = y0;          // 上製品の下trim
+        const yBleed = y0 + nMm;    // 断ち落とし中央
+        const yTrimB = y0 + 2*nMm;  // 下製品の上trim
+        // Left（外＝左）
+        seg(leftX, yTrimT, leftX - tickLen, yTrimT);
+        seg(leftX, yBleed, leftX - tickLen, yBleed);
+        seg(leftX, yTrimB, leftX - tickLen, yTrimB);
+        // Right（外＝右）
+        seg(rightX, yTrimT, rightX + tickLen, yTrimT);
+        seg(rightX, yBleed, rightX + tickLen, yBleed);
+        seg(rightX, yTrimB, rightX + tickLen, yTrimB);
+      }
+
+      ctx.restore();
+    }
+
+    // グループ外周に配置する十字＋円（ブルズアイ）マーク ---------------------------------
+    // 断ち落とし線のすぐ外側に、上下左右それぞれ1つずつ配置します。
+    // 左右配置時: 縦線20mm・横線9mm・円直径5mm（線幅は他のトンボに合わせる・短線9mm）
+    // 上下配置時: 縦線9mm・横線20mm・円直径5mm（左右の入替・短線9mm）
+    function drawBullseyeMarks(ctx, group, lineWidthMm) {
+      if (!group || !group.length) return;
+      const bB = calculateGroupBounds(group, 'bleed');
+      const GAP = 3; // mm: place marks just outside the bleed line
+      const midX = (bB.minX + bB.maxX) / 2;
+      const midY = (bB.minY + bB.maxY) / 2;
+
+      const r = 2.5;            // 半径（直径5mm）
+      const vLR = 20;           // 左右配置時の縦線長
+      const hLR = 9;            // 左右配置時の横線長（短線9mm）
+      const vTB = 9;            // 上下配置時の縦線長（短線9mm）
+      const hTB = 20;           // 上下配置時の横線長
+
+      ctx.save();
+      ctx.strokeStyle = '#111827';
+      ctx.lineWidth = lineWidthMm; // 他トンボと同一線幅
+      ctx.lineCap = 'butt';
+
+      const circle = (cx, cy) => {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+      };
+      const vline = (cx, cy, len) => {
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - len / 2);
+        ctx.lineTo(cx, cy + len / 2);
+        ctx.stroke();
+      };
+      const hline = (cx, cy, len) => {
+        ctx.beginPath();
+        ctx.moveTo(cx - len / 2, cy);
+        ctx.lineTo(cx + len / 2, cy);
+        ctx.stroke();
+      };
+
+      // --- LEFT（外側 = -x）: 中心は断ち落とし境界から半径ぶん外側+GAP
+      {
+        const cx = bB.minX - r - GAP;
+        const cy = midY;
+        vline(cx, cy, vLR);
+        hline(cx, cy, hLR);
+        circle(cx, cy);
+      }
+      // --- RIGHT（外側 = +x）
+      {
+        const cx = bB.maxX + r + GAP;
+        const cy = midY;
+        vline(cx, cy, vLR);
+        hline(cx, cy, hLR);
+        circle(cx, cy);
+      }
+      // --- TOP（外側 = -y）
+      {
+        const cx = midX;
+        const cy = bB.minY - r - GAP;
+        vline(cx, cy, vTB);
+        hline(cx, cy, hTB);
+        circle(cx, cy);
+      }
+      // --- BOTTOM（外側 = +y）
+      {
+        const cx = midX;
+        const cy = bB.maxY + r + GAP;
+        vline(cx, cy, vTB);
+        hline(cx, cy, hTB);
+        circle(cx, cy);
+      }
+
+      ctx.restore();
+    }
+
+    // 埋め込みJSON (<script id="paper-sizes-json">) からプリセットを読み込む
+    function loadPresetData() {
+      const normalize = (data) => (data || []).map(base => ({
+        name_key: String(base.name_key),
+        name_label: String(base.name_label),
+        cuts: (base.cuts || []).map(c => ({
+          cut_key: String(c.cut_key),
+          cut_label: String(c.cut_label),
+          size: [Number(c.size?.[0]), Number(c.size?.[1])],
+          flip: Boolean(c.flip),
+        })).filter(c => Number.isFinite(c.size[0]) && Number.isFinite(c.size[1]))
+      })).filter(b => b.cuts.length > 0);
+
+      const holder = document.getElementById('paper-sizes-json');
+      const txt = holder && holder.textContent && holder.textContent.trim();
+      if (!txt) {
+        console.error('[presets] inline JSON not found: #paper-sizes-json is empty');
+        return [];
+      }
+      try {
+        const json = JSON.parse(txt);
+        return normalize(json);
+      } catch (e) {
+        console.error('[presets] inline JSON parse error:', e);
+        return [];
+      }
+    }
+
+    // 埋め込みJSON (<script id="trim-presets-json">) から仕上がりプリセットを読み込む
+    function loadTrimPresets() {
+      const holder = document.getElementById('trim-presets-json');
+      const txt = holder && holder.textContent && holder.textContent.trim();
+      if (!txt) {
+        console.error('[trim-presets] inline JSON not found: #trim-presets-json is empty');
+        return [];
+      }
+      try {
+        const raw = JSON.parse(txt);
+        return (raw || []).map((p) => ({
+          key: String(p.preset_key || p.key || ''),
+          label: String(p.label || ''),
+          w: p.w != null ? Number(p.w) : null,
+          h: p.h != null ? Number(p.h) : null,
+        }));
+      } catch (e) {
+        console.error('[trim-presets] inline JSON parse error:', e);
+        return [];
+      }
+    }
+
+    function finiteNumber(value, fallback = 0) {
+      return Number.isFinite(value) ? value : fallback;
+    }
+
+    function nonNegativeNumber(value, fallback = 0) {
+      return Math.max(0, finiteNumber(value, fallback));
+    }
+
+    function emptyLayout(trimW = 0, trimH = 0, bleedW = 0, bleedH = 0, margins = {}) {
+      return {
+        leftCols: 0,
+        leftRows: 0,
+        rightCols: 0,
+        rightRows: 0,
+        totalCols: 0,
+        totalRows: 0,
+        positions: [],
+        trimW,
+        trimH,
+        bleedW,
+        bleedH,
+        margins: {
+          gripMargin: margins.gripMargin || 0,
+          tailMargin: margins.tailMargin || 0,
+          leftRightMargin: margins.leftRightMargin || 0,
+          centerMargin: margins.centerMargin || 0,
+        },
+      };
+    }
+
+    function computeLayout({
+      paperW,
+      paperH,
+      prodTrimW,
+      prodTrimH,
+      bleedEachSide,
+      placeOrientation,
+      gripMargin,
+      tailMargin,
+      leftRightMargin,
+      leftRightMarginEnabled,
+      centerMargin,
+      centerMarginEnabled
+    }) {
+      const safePaperW = nonNegativeNumber(paperW);
+      const safePaperH = nonNegativeNumber(paperH);
+      const safeProdTrimW = nonNegativeNumber(prodTrimW);
+      const safeProdTrimH = nonNegativeNumber(prodTrimH);
+      const safeBleedEachSide = nonNegativeNumber(bleedEachSide);
+      const safeGripMargin = nonNegativeNumber(gripMargin);
+      const safeTailMargin = nonNegativeNumber(tailMargin);
+      const safeLeftRightMargin = nonNegativeNumber(leftRightMargin);
+      const safeCenterMargin = nonNegativeNumber(centerMargin);
+
+      let trimW, trimH;
+      if (placeOrientation === "portrait") {
+        trimW = Math.min(safeProdTrimW, safeProdTrimH);
+        trimH = Math.max(safeProdTrimW, safeProdTrimH);
+      } else {
+        trimW = Math.max(safeProdTrimW, safeProdTrimH);
+        trimH = Math.min(safeProdTrimW, safeProdTrimH);
+      }
+
+      const bleedW = trimW + 2 * safeBleedEachSide;
+      const bleedH = trimH + 2 * safeBleedEachSide;
+
+      const actualLeftRightMargin = leftRightMarginEnabled ? safeLeftRightMargin : 0;
+      const actualCenterMargin = centerMarginEnabled ? safeCenterMargin : 0;
+      const effectiveW = Math.max(0, safePaperW - 2 * actualLeftRightMargin);
+      const effectiveH = Math.max(0, safePaperH - safeGripMargin - safeTailMargin);
+      const actualMargins = {
+        gripMargin: safeGripMargin,
+        tailMargin: safeTailMargin,
+        leftRightMargin: actualLeftRightMargin,
+        centerMargin: actualCenterMargin,
+      };
+
+      const positions = [];
+
+      if (safePaperW <= 0 || safePaperH <= 0 || bleedW <= 0 || bleedH <= 0) {
+        return emptyLayout(trimW, trimH, bleedW, bleedH, actualMargins);
+      }
+
+      if (centerMarginEnabled && actualCenterMargin > 0) {
+        const leftAreaW = (effectiveW - actualCenterMargin) / 2;
+        const rightAreaW = leftAreaW;
+
+        const leftCols = Math.max(0, Math.floor(leftAreaW / bleedW));
+        const leftRows = Math.max(0, Math.floor(effectiveH / bleedH));
+        const rightCols = Math.max(0, Math.floor(rightAreaW / bleedW));
+        const rightRows = Math.max(0, Math.floor(effectiveH / bleedH));
+
+        const leftOffsetX = actualLeftRightMargin + (leftAreaW - leftCols * bleedW) / 2;
+        const rightOffsetX = actualLeftRightMargin + leftAreaW + actualCenterMargin + (rightAreaW - rightCols * bleedW) / 2;
+        const leftOffsetY = safeTailMargin + (effectiveH - leftRows * bleedH) / 2;
+        const rightOffsetY = safeTailMargin + (effectiveH - rightRows * bleedH) / 2;
+
+        for (let r = 0; r < leftRows; r++) {
+          for (let c = 0; c < leftCols; c++) {
+            const bleedX = leftOffsetX + c * bleedW;
+            const bleedY = leftOffsetY + r * bleedH;
+            const trimX = bleedX + safeBleedEachSide;
+            const trimY = bleedY + safeBleedEachSide;
+            positions.push({
+              bleed: { x: bleedX, y: bleedY, w: bleedW, h: bleedH },
+              trim:  { x: trimX,  y: trimY,  w: trimW, h: trimH },
+              area: 'left'
+            });
+          }
+        }
+        for (let r = 0; r < rightRows; r++) {
+          for (let c = 0; c < rightCols; c++) {
+            const bleedX = rightOffsetX + c * bleedW;
+            const bleedY = rightOffsetY + r * bleedH;
+            const trimX = bleedX + safeBleedEachSide;
+            const trimY = bleedY + safeBleedEachSide;
+            positions.push({
+              bleed: { x: bleedX, y: bleedY, w: bleedW, h: bleedH },
+              trim:  { x: trimX,  y: trimY,  w: trimW, h: trimH },
+              area: 'right'
+            });
+          }
+        }
+
+        return {
+          leftCols,
+          leftRows,
+          rightCols,
+          rightRows,
+          totalCols: leftCols + rightCols,
+          totalRows: Math.max(leftRows, rightRows),
+          positions,
+          trimW,
+          trimH,
+          bleedW,
+          bleedH,
+          margins: actualMargins
+        };
+      } else {
+        const cols = Math.max(0, Math.floor(effectiveW / bleedW));
+        const rows = Math.max(0, Math.floor(effectiveH / bleedH));
+        const offsetX = actualLeftRightMargin + (effectiveW - cols * bleedW) / 2;
+        const offsetY = safeTailMargin + (effectiveH - rows * bleedH) / 2;
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const bleedX = offsetX + c * bleedW;
+            const bleedY = offsetY + r * bleedH;
+            const trimX = bleedX + safeBleedEachSide;
+            const trimY = bleedY + safeBleedEachSide;
+            positions.push({
+              bleed: { x: bleedX, y: bleedY, w: bleedW, h: bleedH },
+              trim:  { x: trimX,  y: trimY,  w: trimW, h: trimH },
+              area: 'single'
+            });
+          }
+        }
+        return {
+          leftCols: cols,
+          leftRows: rows,
+          rightCols: 0,
+          rightRows: 0,
+          totalCols: cols,
+          totalRows: rows,
+          positions,
+          trimW,
+          trimH,
+          bleedW,
+          bleedH,
+          margins: { ...actualMargins, centerMargin: 0 }
+        };
+      }
+    }
+
+    // --- React Components --------------------------------------------------------
+    function NumericField({ value, onChange, min = 0, step = 1, disabled = false, className, ...props }) {
+      const [draft, setDraft] = useState(() => (Number.isFinite(value) ? String(value) : ''));
+
+      useEffect(() => {
+        setDraft(Number.isFinite(value) ? String(value) : '');
+      }, [value]);
+
+      const commit = (raw) => {
+        if (raw === '' || raw === '-' || raw === '.' || raw === '-.') return;
+        const next = Number(raw);
+        if (Number.isFinite(next)) onChange(next);
+      };
+
+      const normalize = () => {
+        const parsed = Number(draft);
+        const fallback = Number.isFinite(value) ? value : min;
+        const next = Number.isFinite(parsed) ? Math.max(min, parsed) : Math.max(min, fallback);
+        setDraft(String(next));
+        onChange(next);
+      };
+
+      return (
+        <input
+          type="number"
+          className={className}
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            commit(e.target.value);
+          }}
+          onBlur={normalize}
+          min={min}
+          step={step}
+          disabled={disabled}
+          aria-disabled={disabled}
+          {...props}
+        />
+      );
+    }
+
+    function NumberInput({ label, value, onChange, min = 0, step = 1, disabled = false, suffix }) {
+      return (
+        <label className="block min-w-0">
+          <span className={`block text-xs mb-1 ${disabled ? 'text-gray-400 opacity-60' : 'text-gray-600'}`}>{label}</span>
+          <div className="grid grid-cols-[1fr_auto] items-center gap-x-1 min-w-0">
+            <NumericField
+              className={`w-full rounded-lg border-gray-300 border px-3 py-2 text-sm tabular-nums text-right focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-700 disabled:opacity-100 disabled:cursor-not-allowed`}
+              value={value}
+              onChange={onChange}
+              min={min}
+              step={step}
+              disabled={disabled}
+            />
+            {suffix && (
+              <span className="ml-1 text-xs text-gray-400 select-none whitespace-nowrap">{suffix}</span>
+            )}
+          </div>
+        </label>
+      );
+    }
+
+    function LayoutStats({ layout, paperW, paperH }) {
+      const { trimW, trimH, leftCols, leftRows, rightCols, rightRows, positions } = layout;
+      const total = positions.length;
+      const leftTotal = leftCols * leftRows;
+      const rightTotal = rightCols * rightRows;
+      return (
+        <div className="rounded-lg bg-blue-50 p-4">
+          <div className="grid grid-cols-3 gap-6 text-sm">
+            <div>
+              <div className="text-gray-600">面付け数</div>
+              <div className="font-semibold text-lg">{total} 面</div>
+              {rightTotal > 0 ? (
+                <div className="text-gray-500">左:{leftTotal} + 右:{rightTotal}</div>
+              ) : (
+                <div className="text-gray-500">{leftCols} × {leftRows}</div>
+              )}
+            </div>
+            <div>
+              <div className="text-gray-600">製品サイズ</div>
+              <div className="font-semibold">{trimW.toFixed(1)} × {trimH.toFixed(1)} mm</div>
+            </div>
+            <div>
+              <div className="text-gray-600">用紙サイズ</div>
+              <div className="font-semibold">{paperW.toFixed(1)} × {paperH.toFixed(1)} mm</div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      // 状態管理 - 用紙は常に横置き
+      // フルスクリーンプレビュー状態
+      const [isFullscreen, setIsFullscreen] = useState(false);
+      // 通常プレビューでエリアにフィットするか（実寸 or フィット）
+      const [fitToArea, setFitToArea] = useState(true);
+      const [fitScale, setFitScale] = useState(1);
+      // 仕上がりサイズプリセット
+      const [selectedTrimPresetKey, setSelectedTrimPresetKey] = useState('none');
+      const [trimPresets, setTrimPresets] = useState([]);
+      const [paperLong, setPaperLong] = useState(936);  // 長辺（菊全判デフォルト）
+      const [paperShort, setPaperShort] = useState(632); // 短辺（菊全判デフォルト）
+      const [prodTrimW, setProdTrimW] = useState(210);
+      const [prodTrimH, setProdTrimH] = useState(297);
+      const [bleedEachSide, setBleedEachSide] = useState(3);
+      const [placeOrientation, setPlaceOrientation] = useState("portrait");
+      // const [selectedPreset, setSelectedPreset] = useState("K-zen");
+      const [grain, setGrain] = useState("Y"); // "T" | "Y"  全判Y目デフォルト
+      const [customMode, setCustomMode] = useState(false); // カスタム入力モード（trueでプルダウン無効・タテ/ヨコ有効）
+
+      // 外部プリセット
+      const [bases, setBases] = useState([]); // [{name_key,name_label,cuts:[...]}]
+      const [selectedBaseKey, setSelectedBaseKey] = useState('');
+      const [selectedCutKey, setSelectedCutKey] = useState('');
+
+      // 初回ロード
+      useEffect(() => {
+        const data = loadPresetData();
+        setBases(data);
+        const trims = loadTrimPresets();
+        setTrimPresets(trims);
+      }, []);
+
+      // ベース／断裁の候補と選択
+      const baseOptions = useMemo(() => bases.map(b => ({ key: b.name_key, label: b.name_label })), [bases]);
+      const currentBase = useMemo(() => bases.find(b => b.name_key === selectedBaseKey) || null, [bases, selectedBaseKey]);
+      const cutOptions = useMemo(() => (currentBase?.cuts || []).map(c => ({ key: c.cut_key, label: c.cut_label })), [currentBase]);
+      const currentCut = useMemo(() => (currentBase?.cuts || []).find(c => c.cut_key === selectedCutKey) || null, [currentBase, selectedCutKey]);
+
+      // 初期選択（データ到着→デフォルトベース優先で選択、ベース変更→デフォルトカット優先で選択）
+      useEffect(() => {
+        if (!bases.length) return;
+        if (!selectedBaseKey) {
+          const defaultBase = bases.find(b => b.name_key === 'kiku') || bases[0];
+          setSelectedBaseKey(defaultBase.name_key);
+        }
+      }, [bases]);
+
+      useEffect(() => {
+        if (!currentBase) return;
+        if (!selectedCutKey) {
+          const defaultCut = currentBase.cuts.find(c => c.cut_key === 'zen') || currentBase.cuts[0];
+          setSelectedCutKey(defaultCut?.cut_key || '');
+        }
+      }, [currentBase?.name_key]);
+      // マージン設定
+      const [gripMargin, setGripMargin] = useState(10);
+      const [tailMargin, setTailMargin] = useState(10);
+      const [leftRightMargin, setLeftRightMargin] = useState(10);
+      const [leftRightMarginEnabled, setLeftRightMarginEnabled] = useState(true);
+      const [centerMargin, setCenterMargin] = useState(20);
+      const [centerMarginEnabled, setCenterMarginEnabled] = useState(false);
+
+      // CSS上の 1mm あたりのpxを自動測定
+      const [pxPerMm, setPxPerMm] = useState(96 / 25.4);
+      useEffect(() => { setPxPerMm(measurePxPerMm()); }, []);
+
+      // 入力欄: フォーカス時に全選択 / Enter確定で次の項目へ
+      useEffect(() => {
+        const root = document.getElementById('root');
+        if (!root) return;
+
+        const onFocusIn = (e) => {
+          const t = e.target;
+          if (!isEditableField(t)) return;
+          // フォーカス直後に全選択（マウスアップでの選択上書きを回避）
+          if (t.tagName === 'INPUT') {
+            setTimeout(() => { try { t.select(); } catch (_) {} }, 0);
+          }
+        };
+
+        const onKeyDown = (e) => {
+          const t = e.target;
+          if (!isEditableField(t)) return;
+          // Enter / NumpadEnter で次の入力欄へ移動（チェックボックス等は対象外）
+          if (e.key === 'Enter' || e.key === 'NumpadEnter') {
+            e.preventDefault();
+            e.stopPropagation();
+            focusNextField(t, root);
+          }
+        };
+
+        root.addEventListener('focusin', onFocusIn, true);
+        root.addEventListener('keydown', onKeyDown, true);
+        return () => {
+          root.removeEventListener('focusin', onFocusIn, true);
+          root.removeEventListener('keydown', onKeyDown, true);
+        };
+      }, []);
+
+      // キャンバス参照
+      const wrapperRef = useRef(null);
+      const canvasRef = useRef(null);
+
+      // mm→CSS px変換
+      const mm2px = (mm) => mm * pxPerMm;
+
+      const safePaperLong = nonNegativeNumber(paperLong);
+      const safePaperShort = nonNegativeNumber(paperShort);
+      const safeProdTrimW = nonNegativeNumber(prodTrimW);
+      const safeProdTrimH = nonNegativeNumber(prodTrimH);
+      const safeBleedEachSide = nonNegativeNumber(bleedEachSide);
+      const safeGripMargin = nonNegativeNumber(gripMargin);
+      const safeTailMargin = nonNegativeNumber(tailMargin);
+      const safeLeftRightMargin = nonNegativeNumber(leftRightMargin);
+      const safeCenterMargin = nonNegativeNumber(centerMargin);
+
+      // 用紙サイズの自動判定（横置き前提）
+      const paperW = Math.max(safePaperLong, safePaperShort);
+      const paperH = Math.min(safePaperLong, safePaperShort);
+
+      // 選択された断裁サイズを反映（常に横置き：長辺×短辺）
+      useEffect(() => {
+        if (customMode) return; // カスタム時は自動反映しない
+        if (!currentCut?.size) return;
+        const [a, b] = currentCut.size;
+        const W = Math.max(a, b);
+        const H = Math.min(a, b);
+        setPaperLong(W);
+        setPaperShort(H);
+      }, [currentCut, customMode]);
+
+      // カスタム→OFFに戻した瞬間も、プリセット寸法に復帰
+      useEffect(() => {
+        if (customMode) return;
+        if (!currentCut?.size) return;
+        const [a, b] = currentCut.size;
+        const W = Math.max(a, b);
+        const H = Math.min(a, b);
+        setPaperLong(W);
+        setPaperShort(H);
+      }, [customMode]);
+
+      // プレビュー用の「目」(effectiveGrain): cut.flip が true のときだけ反転
+      const effectiveGrain = useMemo(() => {
+        const base = grain; // ユーザが選んだ「全判基準」の目
+        const flip = currentCut?.flip;
+        if (!flip) return base;
+        return base === 'T' ? 'Y' : 'T';
+      }, [grain, currentCut]);
+
+      // PNGエクスポート用関数
+      const handleSavePNG = async (targetWidthPx = 2000) => {
+        try {
+          const padding = 20; // 描画余白（drawと合わせる）
+          const contentW = mm2px(paperW) + padding * 2;
+          const contentH = mm2px(paperH) + padding * 2;
+          const scaleExport = targetWidthPx / contentW;
+          const targetHeightPx = Math.max(1, Math.round(contentH * scaleExport));
+          const footerHeightPx = 48; // 1行表示
+
+          // オフスクリーンキャンバス（フッターぶんを追加）
+          const off = document.createElement('canvas');
+          off.width = targetWidthPx;
+          off.height = targetHeightPx + footerHeightPx;
+          const ctx = off.getContext('2d');
+          if (!ctx) return;
+
+          // 描画系：画面描画と同じロジック（mmベース→px）
+          ctx.setTransform(scaleExport, 0, 0, scaleExport, 0, 0);
+          ctx.clearRect(0, 0, contentW, contentH);
+          ctx.save();
+          ctx.translate(padding, padding); // CSS pxベース
+          ctx.scale(pxPerMm, pxPerMm);     // 以降は mm 単位
+
+          // 背景紙
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, paperW, paperH);
+
+          // 紙の目
+          if (typeof drawPaperGrain === 'function') {
+            drawPaperGrain(ctx, paperW, paperH, effectiveGrain);
+          }
+
+          // 用紙枠
+          ctx.strokeStyle = '#1f2937';
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(0, 0, paperW, paperH);
+
+          // マージン塗り
+          // 下（咥え）
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+          ctx.fillRect(0, (paperH - safeGripMargin), paperW, safeGripMargin);
+          // 上（咥え尻）
+          ctx.fillStyle = 'rgba(156, 163, 175, 0.2)';
+          ctx.fillRect(0, 0, paperW, safeTailMargin);
+          // 左右
+          if (leftRightMarginEnabled) {
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+            ctx.fillRect(0, 0, safeLeftRightMargin, paperH);
+            ctx.fillRect((paperW - safeLeftRightMargin), 0, safeLeftRightMargin, paperH);
+          }
+          // 中央
+          if (centerMarginEnabled && safeCenterMargin > 0) {
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+            const actualLeftRightMargin = leftRightMarginEnabled ? safeLeftRightMargin : 0;
+            const centerX = (actualLeftRightMargin + (paperW - 2 * actualLeftRightMargin - safeCenterMargin) / 2);
+            ctx.fillRect(centerX, safeTailMargin, safeCenterMargin, (paperH - safeGripMargin - safeTailMargin));
+          }
+
+          // 裁ち落とし枠
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 0.4;
+          for (const pos of layout.positions) {
+            const { x, y, w, h } = pos.bleed;
+            ctx.strokeRect(x, y, w, h);
+          }
+
+          // 仕上がり枠
+          ctx.strokeStyle = '#16a34a';
+          ctx.lineWidth = 0.4;
+          for (const pos of layout.positions) {
+            const { x, y, w, h } = pos.trim;
+            ctx.strokeRect(x, y, w, h);
+          }
+
+          // トンボ類
+          if (typeof drawRegistrationMarks === 'function') {
+            drawRegistrationMarks(ctx, layout);
+          }
+
+          ctx.restore();
+
+          // --- フッター情報（ピクセル座標で描画） ---
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          // 背景帯（白）
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, targetHeightPx, targetWidthPx, footerHeightPx);
+          // 罫線
+          ctx.strokeStyle = '#e5e7eb';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(0, targetHeightPx + 0.5);
+          ctx.lineTo(targetWidthPx, targetHeightPx + 0.5);
+          ctx.stroke();
+          // テキスト（左右中央揃え・プリセット名対応）
+          const grainLabel = (grain === 'T') ? 'T目' : 'Y目'; // 全判での目（flip適用前）
+          const paperLabel = (!customMode && currentBase && currentCut)
+            ? `${currentBase.name_label} ${currentCut.cut_label}（${grainLabel} ${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ）`
+            : `${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ`;
+          const paperText = `紙サイズ: ${paperLabel}`;
+          const trimText  = `製品仕上がりサイズ: ${layout.trimW.toFixed(1)}×${layout.trimH.toFixed(1)}ミリ　裁ち落とし: ${safeBleedEachSide.toFixed(1)}mm`;
+          const countText = `面付け数: ${layout.positions.length}面`;
+          const gripText = `咥え: ${layout.margins.gripMargin.toFixed(1)}mm`;
+          const tailText = `咥え尻: ${layout.margins.tailMargin.toFixed(1)}mm`;
+          const gripTailText = `${gripText}、${tailText}`;
+          const lrText = `左右アキ: ${layout.margins.leftRightMargin.toFixed(1)}mm`;
+          const centerText = layout.margins.centerMargin > 0 ? `中央アキ: ${layout.margins.centerMargin.toFixed(1)}mm` : null;
+          const parts = [paperText, trimText, countText, gripTailText, lrText];
+          if (centerText) parts.push(centerText);
+          const infoLine = parts.join('　　'); // 全角スペース区切り
+
+          ctx.fillStyle = '#111827';
+          ctx.font = '14px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'center';
+          const centerX = targetWidthPx / 2;
+          const centerY = targetHeightPx + footerHeightPx / 2;
+          ctx.fillText(infoLine, centerX, centerY);
+
+          // PNGへ
+          const dataURL = off.toDataURL('image/png');
+          const a = document.createElement('a');
+          const ts = new Date().toISOString().replace(/[:.]/g, '-');
+          a.download = `imposition_${Math.round(paperW)}x${Math.round(paperH)}mm_${ts}_w${targetWidthPx}.png`;
+          a.href = dataURL;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } catch (e) {
+          console.error('PNG export failed:', e);
+        }
+      };
+      const layout = useMemo(() => computeLayout({
+        paperW, paperH, prodTrimW: safeProdTrimW, prodTrimH: safeProdTrimH, bleedEachSide: safeBleedEachSide, placeOrientation,
+        gripMargin: safeGripMargin, tailMargin: safeTailMargin, leftRightMargin: safeLeftRightMargin, leftRightMarginEnabled,
+        centerMargin: safeCenterMargin, centerMarginEnabled
+      }), [paperW, paperH, safeProdTrimW, safeProdTrimH, safeBleedEachSide, placeOrientation, safeGripMargin, safeTailMargin, safeLeftRightMargin, leftRightMarginEnabled, safeCenterMargin, centerMarginEnabled]);
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        const wrapper = wrapperRef.current;
+        if (!canvas) return;
+
+        const padding = 20; // 描画余白
+        // contentW/contentH are now provided by a helper function
+        const getContentSize = () => {
+          const w = mm2px(paperW) + padding * 2;
+          const h = mm2px(paperH) + padding * 2;
+          return { contentW: w, contentH: h };
+        };
+
+        const getAvailableSize = () => {
+          if (isFullscreen) {
+            return { w: window.innerWidth, h: window.innerHeight };
+          }
+          const w = Math.max(1, wrapper?.clientWidth || 1);
+          const h = Math.max(1, wrapper?.clientHeight || 1);
+          return { w, h };
+        };
+
+        // スケール計算・キャッシュ（安定化・ヒステリシス付き）
+        let animationId = 0;
+        let rafForScale = 0;
+        const lastSize = { cssW: -1, cssH: -1 };
+
+        // スケール計算・キャッシュ（安定化・ヒステリシス付き、極小サイズは無視して次フレームで再試行）
+        const computeAndSetScale = () => {
+          const { contentW, contentH } = getContentSize();
+          const { w: rawW, h: rawH } = getAvailableSize();
+          // 極小（レイアウト未確定）なら次フレームで再試行
+          if (!Number.isFinite(rawW) || !Number.isFinite(rawH) || rawW < 100 || rawH < 100) {
+            if (!rafForScale) {
+              rafForScale = requestAnimationFrame(() => {
+                rafForScale = 0;
+                computeAndSetScale();
+              });
+            }
+            return;
+          }
+          const availableW = Math.max(1, rawW);
+          const availableH = Math.max(1, rawH);
+          // Fit logic: fullscreen fits both, normal preview fits width only
+          let target;
+          if (isFullscreen) {
+            // Fullscreen: fit both dimensions
+            target = Math.min(availableW / contentW, availableH / contentH);
+          } else if (fitToArea) {
+            // Normal preview: fit to width so it fills horizontally
+            target = availableW / contentW;
+          } else {
+            target = 1;
+          }
+          const rounded = Math.max(0, Math.round(target * 10000) / 10000);
+          const EPS = 0.001;
+          setFitScale(prev => (Math.abs((rounded || 1) - (prev || 1)) < EPS ? prev : (rounded || 1)));
+        };
+
+        // キャンバス描画
+        const draw = () => {
+          try {
+            const { contentW, contentH } = getContentSize();
+            // スケールはキャッシュされた値を利用
+            const scale = fitScale || 1;
+            // CSSピクセル値は直接スケール計算値を使う
+            const cssW = Math.max(1, contentW * scale);
+            const cssH = Math.max(1, contentH * scale);
+
+            const sizeChanged = Math.abs(cssW - lastSize.cssW) >= 0.5 || Math.abs(cssH - lastSize.cssH) >= 0.5;
+            lastSize.cssW = cssW; lastSize.cssH = cssH;
+
+            const qualityFactor = 2; // 1.0 = 標準, 2.0 = 高精細
+            const dpr = (window.devicePixelRatio || 1) * qualityFactor;
+            // 先にアスペクト比を確定し、幅→高さの順で一度だけ反映（maxWidthで親幅超過も防止）
+            canvas.style.aspectRatio = `${contentW} / ${contentH}`;
+            canvas.style.width = `${cssW}px`;
+            canvas.style.maxWidth = '100%';
+            canvas.style.height = `${cssH}px`;
+            const bufferW = Math.ceil(cssW * dpr);
+            const bufferH = Math.ceil(cssH * dpr);
+            canvas.width = bufferW; canvas.height = bufferH;
+
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return;
+
+            ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+            ctx.clearRect(0, 0, contentW, contentH);
+
+            ctx.save();
+            ctx.translate(padding, padding);      // CSS px
+            ctx.scale(pxPerMm, pxPerMm);          // 以降は「mm」単位
+
+            // 用紙の背景
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, paperW, paperH);
+
+            // 紙の目プレビュー
+            if (typeof drawPaperGrain === 'function') {
+              drawPaperGrain(ctx, paperW, paperH, effectiveGrain);
+            }
+
+            // 用紙枠
+            ctx.strokeStyle = "#1f2937";
+            ctx.lineWidth = 0.5;
+            ctx.strokeRect(0, 0, paperW, paperH);
+
+            // マージンエリア
+            // 下マージン（咥え幅）：薄い赤
+            ctx.fillStyle = "rgba(239, 68, 68, 0.2)";
+            ctx.fillRect(0, (paperH - safeGripMargin), paperW, safeGripMargin);
+            // 上マージン（咥え尻）：薄いグレー
+            ctx.fillStyle = "rgba(156, 163, 175, 0.2)";
+            ctx.fillRect(0, 0, paperW, safeTailMargin);
+            // 左右マージン：薄い青
+            if (leftRightMarginEnabled) {
+              ctx.fillStyle = "rgba(59, 130, 246, 0.2)";
+              ctx.fillRect(0, 0, safeLeftRightMargin, paperH);
+              ctx.fillRect((paperW - safeLeftRightMargin), 0, safeLeftRightMargin, paperH);
+            }
+            // 中央マージン：薄い青
+            if (centerMarginEnabled && safeCenterMargin > 0) {
+              ctx.fillStyle = "rgba(59, 130, 246, 0.2)";
+              const actualLeftRightMargin = leftRightMarginEnabled ? safeLeftRightMargin : 0;
+              const centerX = (actualLeftRightMargin + (paperW - 2 * actualLeftRightMargin - safeCenterMargin) / 2);
+              ctx.fillRect(centerX, safeTailMargin, safeCenterMargin, (paperH - safeGripMargin - safeTailMargin));
+            }
+
+            // 裁ち落とし枠（青）
+            ctx.strokeStyle = "#2563eb";
+            ctx.lineWidth = 0.4;
+            for (const pos of layout.positions) {
+              const { x, y, w, h } = pos.bleed;
+              ctx.strokeRect(x, y, w, h);
+            }
+
+            // 仕上がり枠（緑）
+            ctx.strokeStyle = "#16a34a";
+            ctx.lineWidth = 0.4;
+            for (const pos of layout.positions) {
+              const { x, y, w, h } = pos.trim;
+              ctx.strokeRect(x, y, w, h);
+            }
+
+            // トンボ
+            if (typeof drawRegistrationMarks === 'function') {
+              drawRegistrationMarks(ctx, layout);
+            }
+
+            ctx.restore();
+          } catch (e) {
+            console.error('[draw] error', e);
+          }
+        };
+
+        const scheduleRedraw = () => {
+          if (animationId) return;
+          animationId = requestAnimationFrame(() => {
+            animationId = 0;
+            draw();
+          });
+        };
+
+        // ResizeObserver: wrapper の「幅」変化にのみ反応（高さだけの変化は無視してループ防止）
+        let lastObservedWidth = -1;
+        const resizeObserver = new ResizeObserver((entries) => {
+          const entry = entries && entries[0];
+          const cr = entry && entry.contentRect;
+          const w = Math.round((cr && cr.width) || (wrapper ? wrapper.clientWidth : 0) || 0);
+          if (w <= 0) return;
+          if (w === lastObservedWidth) return; // 高さのみの変化は無視
+          lastObservedWidth = w;
+          computeAndSetScale();
+          scheduleRedraw();
+        });
+        if (!isFullscreen && wrapper) {
+          resizeObserver.observe(wrapper);
+        }
+        // FS時のみウインドウリサイズを監視（通常時はROに任せる）
+        const handleWindowResize = () => { computeAndSetScale(); scheduleRedraw(); };
+        if (isFullscreen) {
+          window.addEventListener("resize", handleWindowResize);
+        }
+        computeAndSetScale();
+        scheduleRedraw();
+        let postInitRaf = requestAnimationFrame(() => {
+          computeAndSetScale();
+          scheduleRedraw();
+          postInitRaf = 0;
+        });
+
+        return () => {
+          if (animationId) cancelAnimationFrame(animationId);
+          if (rafForScale) cancelAnimationFrame(rafForScale);
+          if (postInitRaf) cancelAnimationFrame(postInitRaf);
+          resizeObserver.disconnect();
+          if (isFullscreen) window.removeEventListener("resize", handleWindowResize);
+        };
+      }, [layout, paperW, paperH, pxPerMm, safeGripMargin, safeTailMargin, safeLeftRightMargin, leftRightMarginEnabled, safeCenterMargin, centerMarginEnabled, effectiveGrain, isFullscreen, fitToArea, fitScale]);
+
+
+
+      useEffect(() => {
+        const preset = trimPresets.find(p => p.key === selectedTrimPresetKey);
+        if (!preset || preset.w == null || preset.h == null) return;
+        setProdTrimW(preset.w);
+        setProdTrimH(preset.h);
+      }, [selectedTrimPresetKey, trimPresets]);
+
+      return (
+        <div className="min-h-screen bg-white p-4">
+          <div className="mx-auto max-w-7xl p-3 space-y-6">
+
+            <div className="space-y-4">
+              <div className="grid gap-4 min-[1000px]:grid-cols-2">
+              {/* プリセット選択と用紙サイズ */}
+              <section aria-labelledby="paper-size-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
+                <h2 id="paper-size-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">用紙サイズ（mm）</h2>
+                <div className="space-y-2">
+                  {/* 1行目：判型／断裁セレクト＋カスタム */}
+                  <div className="flex flex-nowrap items-end gap-2">
+                    <div className="flex-[3_1_0%] min-w-0 opacity-100">
+                      <label className="block">
+                        <span className="block text-xs text-gray-600 mb-1">判型</span>
+                        <select
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${customMode ? 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300'}`}
+                          value={selectedBaseKey}
+                          onChange={(e) => { setSelectedBaseKey(e.target.value); setSelectedCutKey(''); }}
+                          disabled={customMode}
+                          aria-disabled={customMode}
+                        >
+                          {baseOptions.map((b) => (
+                            <option key={b.key} value={b.key}>{b.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="flex-[2_1_0%] min-w-0">
+                      <label className="block">
+                        <span className="block text-xs text-gray-600 mb-1">断裁</span>
+                        <select
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${customMode ? 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300'}`}
+                          value={selectedCutKey}
+                          onChange={(e) => setSelectedCutKey(e.target.value)}
+                          disabled={customMode}
+                          aria-disabled={customMode}
+                        >
+                          {(currentBase?.cuts || []).map((c) => (
+                            <option key={c.cut_key} value={c.cut_key}>{c.cut_label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 2行目：タテ／ヨコ（カスタム時のみ有効）＋カスタムチェックボックス */}
+                  <div className="flex flex-nowrap items-start gap-2">
+                    <div className="flex flex-col items-center pt-5">
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        checked={customMode}
+                        onChange={(e) => setCustomMode(e.target.checked)}
+                        aria-label="カスタム切替"
+                      />
+                      <span
+                        className={`mt-1 inline-block w-2 h-2 rounded-full ${customMode ? 'bg-blue-600' : 'bg-gray-300'}`}
+                        aria-hidden="true"
+                      ></span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 flex-1">
+                      <NumberInput label="タテ" value={paperLong} onChange={setPaperLong} min={1} step={0.5} disabled={!customMode} />
+                      <NumberInput label="ヨコ" value={paperShort} onChange={setPaperShort} min={1} step={0.5} disabled={!customMode} />
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* 仕上がりサイズと裁ち落とし */}
+              <section aria-labelledby="trim-bleed-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
+                <h2 id="trim-bleed-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">仕上がりサイズ・裁ち落とし（mm）</h2>
+                <div className="mb-3">
+                  <label className="block">
+                    <span className="block text-xs text-gray-600 mb-1">仕上がりプリセット</span>
+                    <select
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      value={selectedTrimPresetKey}
+                      onChange={(e) => setSelectedTrimPresetKey(e.target.value)}
+                    >
+                      {trimPresets.map((p) => (
+                        <option key={p.key} value={p.key}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <NumberInput label="タテ" value={prodTrimW} onChange={setProdTrimW} min={1} step={0.5} />
+                  <NumberInput label="ヨコ" value={prodTrimH} onChange={setProdTrimH} min={1} step={0.5} />
+                  <NumberInput label="裁ち落とし" value={bleedEachSide} onChange={setBleedEachSide} min={0} step={1} />
+                </div>
+              </section>
+              </div>
+              <div className="grid gap-4 min-[1000px]:grid-cols-2">
+
+              {/* マージン設定 */}
+              <section aria-labelledby="margin-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
+                <h2 id="margin-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">マージン設定（mm）</h2>
+                <div className="grid gap-4 grid-cols-2 min-[500px]:grid-cols-4">
+                  <div className="min-w-0">
+                    <NumberInput label="咥え" value={gripMargin} onChange={setGripMargin} min={0} step={0.5} />
+                  </div>
+                  <div className="min-w-0">
+                    <NumberInput label="咥え尻" value={tailMargin} onChange={setTailMargin} min={0} step={0.5} />
+                  </div>
+                  <div className="min-w-0">
+                    <label className="block">
+                      <span className="block text-xs text-gray-600 mb-1">左右マージン</span>
+                      <div className="grid grid-cols-[auto_auto_1fr] items-center gap-2 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={leftRightMarginEnabled}
+                          onChange={(e) => setLeftRightMarginEnabled(e.target.checked)}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-xs text-gray-600">あり</span>
+                        <div className="min-w-0">
+                          <NumericField
+                            className="w-full min-w-0 rounded-lg border-gray-300 border px-3 py-2 text-sm tabular-nums text-right focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                            value={leftRightMargin}
+                            onChange={setLeftRightMargin}
+                            min={0}
+                            step={0.1}
+                            disabled={!leftRightMarginEnabled}
+                          />
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                  <div className="min-w-0">
+                    <label className="block">
+                      <span className="block text-xs text-gray-600 mb-1">中央マージン</span>
+                      <div className="grid grid-cols-[auto_auto_1fr] items-center gap-2 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={centerMarginEnabled}
+                          onChange={(e) => setCenterMarginEnabled(e.target.checked)}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-xs text-gray-600">あり</span>
+                        <div className="min-w-0">
+                          <NumericField
+                            className="w-full min-w-0 rounded-lg border-gray-300 border px-3 py-2 text-sm tabular-nums text-right focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                            value={centerMargin}
+                            onChange={setCenterMargin}
+                            min={0}
+                            step={0.1}
+                            disabled={!centerMarginEnabled}
+                          />
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                </div></section>
+
+              {/* 配置方向 / 紙の目 */}
+              <section aria-labelledby="orientation-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
+                <h2 id="orientation-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">配置方向 / 紙の目（断裁後の目：{effectiveGrain === "T" ? "T目" : "Y目"}）</h2>
+                <div className="flex flex-nowrap items-center gap-2">
+                  <div className="flex flex-nowrap gap-2">
+                    <button
+                      className={`px-2 sm:px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
+                        placeOrientation === "portrait"
+                          ? "bg-blue-600 text-white border-blue-600"
+                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                      }`}
+                      onClick={() => setPlaceOrientation("portrait")}
+                    >
+                      縦置き
+                    </button>
+                    <button
+                      className={`px-2 sm:px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
+                        placeOrientation === "landscape"
+                          ? "bg-blue-600 text-white border-blue-600"
+                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                      }`}
+                      onClick={() => setPlaceOrientation("landscape")}
+                    >
+                      横置き
+                    </button>
+                  </div>
+                  <div className="w-px h-6 bg-gray-300" aria-hidden="true"></div>
+                  <div className="flex flex-nowrap gap-2">
+                    <button
+                      className={`px-1.5 sm:px-2 py-2 rounded-lg border font-medium text-sm transition-colors ${
+                        grain === "T"
+                          ? "bg-sky-600 text-white border-sky-600"
+                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                      }`}
+                      onClick={() => setGrain("T")}
+                    >
+                      全判T目
+                    </button>
+                    <button
+                      className={`px-1.5 sm:px-2 py-2 rounded-lg border font-medium text-sm transition-colors ${
+                        grain === "Y"
+                          ? "bg-sky-600 text-white border-sky-600"
+                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                      }`}
+                      onClick={() => setGrain("Y")}
+                    >
+                      全判Y目
+                    </button>
+                  </div>
+                </div>
+              </section>
+              </div>
+
+            </div>
+
+            {/* レイアウト結果 */}
+            <LayoutStats layout={layout} paperW={paperW} paperH={paperH} />
+
+            {/* プレビューエリア */}
+            {/* Fullscreen overlay */}
+            {isFullscreen && (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center"
+                onClick={() => setIsFullscreen(false)}
+                style={{ cursor: 'zoom-out', background: 'transparent' }}
+              >
+                <canvas ref={canvasRef} className="block" />
+              </div>
+            )}
+            {/* Normal preview area, clickable for fullscreen */}
+            <div
+              className="overflow-hidden"
+              onClick={() => setIsFullscreen(true)}
+              style={{ cursor: 'zoom-in' }}
+            >
+              <div
+                ref={wrapperRef}
+                className="p-0 overflow-hidden w-full"
+              >
+                {!isFullscreen && (
+                   <canvas ref={canvasRef} className="border w-full h-auto aspect-square" style={{ display: 'block' }} />
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end mt-3">
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 active:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onClick={(e) => { e.stopPropagation(); handleSavePNG(3000); }}
+                title="プレビューをPNGで保存"
+              >
+                画像として保存
+              </button>
+            </div>
+            <footer className="border-t border-slate-200 pt-4 text-xs text-slate-500">
+              <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+                <span>MIT License</span>
+                <a
+                  className="text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline"
+                  href="https://github.com/Yamonov/Imposition-Simulator/blob/main/LICENSE"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  ライセンス
+                </a>
+                <a
+                  className="text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline"
+                  href="./licenses.md"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  依存ライセンス
+                </a>
+                <a
+                  className="text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline"
+                  href="https://github.com/Yamonov/Imposition-Simulator"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  GitHub
+                </a>
+              </div>
+            </footer>
+          </div>
+        </div>
+      );
+    }
+
+export default App;
