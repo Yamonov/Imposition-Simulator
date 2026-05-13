@@ -900,12 +900,12 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
       const [fitToArea, setFitToArea] = useState(true);
       const [fitScale, setFitScale] = useState(1);
       // 仕上がりサイズプリセット
-      const [selectedTrimPresetKey, setSelectedTrimPresetKey] = useState('none');
+      const [selectedTrimPresetKey, setSelectedTrimPresetKey] = useState('a4');
       const [trimPresets, setTrimPresets] = useState([]);
       const [paperLong, setPaperLong] = useState(936);  // 長辺（菊全判デフォルト）
       const [paperShort, setPaperShort] = useState(632); // 短辺（菊全判デフォルト）
-      const [prodTrimW, setProdTrimW] = useState(210);
-      const [prodTrimH, setProdTrimH] = useState(297);
+      const [prodTrimW, setProdTrimW] = useState(297);
+      const [prodTrimH, setProdTrimH] = useState(210);
       const [bleedEachSide, setBleedEachSide] = useState(3);
       const [placeOrientation, setPlaceOrientation] = useState("portrait");
       // const [selectedPreset, setSelectedPreset] = useState("K-zen");
