@@ -39,6 +39,16 @@ import React, { useMemo, useRef, useEffect, useState } from 'react';
       }
     }
 
+    function selectInputValue(input) {
+      if (!input || input.disabled || input.readOnly) return;
+      const select = () => {
+        if (document.activeElement !== input) return;
+        try { input.select(); } catch (_) {}
+      };
+      requestAnimationFrame(select);
+      setTimeout(select, 0);
+    }
+
     // 1mmあたりのpx値を測定
     function measurePxPerMm() {
       const probe = document.createElement("div");
@@ -824,7 +834,8 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
 
       return (
         <input
-          type="number"
+          type="text"
+          inputMode="decimal"
           className={className}
           value={draft}
           onChange={(e) => {
@@ -832,6 +843,11 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
             commit(e.target.value);
           }}
           onBlur={normalize}
+          onFocus={(e) => selectInputValue(e.currentTarget)}
+          onMouseUp={(e) => {
+            e.preventDefault();
+            selectInputValue(e.currentTarget);
+          }}
           min={min}
           step={step}
           disabled={disabled}
@@ -969,7 +985,7 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
           if (!isEditableField(t)) return;
           // フォーカス直後に全選択（マウスアップでの選択上書きを回避）
           if (t.tagName === 'INPUT') {
-            setTimeout(() => { try { t.select(); } catch (_) {} }, 0);
+            selectInputValue(t);
           }
         };
 
