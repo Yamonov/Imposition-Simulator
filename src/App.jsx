@@ -207,6 +207,18 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
   }
   ctx.restore();
 }
+
+function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
+  if (positions.length > 0) return;
+  ctx.save();
+  ctx.fillStyle = "rgba(15, 23, 42, 0.72)";
+  ctx.font = "600 8px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("面付けできません", paperW / 2, paperH / 2);
+  ctx.restore();
+}
+
     // 日本式ダブルトンボ一式の描画 ------------------------------------------------
     function drawRegistrationMarks(ctx, layout) {
       ctx.save();
@@ -1138,6 +1150,7 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
           if (typeof drawRegistrationMarks === 'function') {
             drawRegistrationMarks(ctx, layout);
           }
+          drawEmptyLayoutMessage(ctx, paperW, paperH, layout.positions);
 
           ctx.restore();
 
@@ -1345,6 +1358,7 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
             if (typeof drawRegistrationMarks === 'function') {
               drawRegistrationMarks(ctx, layout);
             }
+            drawEmptyLayoutMessage(ctx, paperW, paperH, layout.positions);
 
             ctx.restore();
           } catch (e) {
