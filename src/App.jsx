@@ -1,5 +1,179 @@
 import React, { useMemo, useRef, useEffect, useState } from 'react';
 
+    const LANGUAGE_STORAGE_KEY = 'imposition-simulator.language';
+
+    const TEXT = {
+      ja: {
+        appTitle: '面付けツール',
+        languageLabel: '表示言語',
+        paperSizeSection: '用紙サイズ（mm）',
+        parentSheet: '判型',
+        cutSize: '断裁',
+        toggleCustomSize: 'カスタム切替',
+        paperLongSide: 'タテ',
+        paperShortSide: 'ヨコ',
+        trimBleedSection: '仕上がりサイズ・裁ち落とし（mm）',
+        trimPreset: '仕上がりプリセット',
+        trimHeight: 'タテ',
+        trimWidth: 'ヨコ',
+        bleed: '裁ち落とし',
+        marginSection: 'マージン設定（mm）',
+        gripperMargin: '咥え',
+        tailMargin: '咥え尻',
+        sideMargin: '左右マージン',
+        centerMargin: '中央マージン',
+        on: 'あり',
+        orientationTitle: '配置方向 / 紙の目',
+        afterCut: '断裁後の目',
+        portraitPlacement: '縦置き',
+        landscapePlacement: '横置き',
+        numberUp: '面付け数',
+        trimSize: '製品サイズ',
+        paperSize: '用紙サイズ',
+        savePngTitle: 'プレビューをPNGで保存',
+        savePng: '画像として保存',
+        license: 'ライセンス',
+        thirdPartyLicenses: '依存ライセンス',
+        emptyLayoutMessage: '面付けできません',
+        pngPaperSize: '紙サイズ',
+        pngFinishedTrimSize: '製品仕上がりサイズ',
+        pngNumberUp: '面付け数',
+        pngGripper: '咥え',
+        pngTail: '咥え尻',
+        pngSideGap: '左右アキ',
+        pngCenterGap: '中央アキ',
+      },
+      en: {
+        appTitle: 'Imposition Simulator',
+        languageLabel: 'Language',
+        paperSizeSection: 'Paper size (mm)',
+        parentSheet: 'Parent sheet',
+        cutSize: 'Cut size',
+        toggleCustomSize: 'Toggle custom size',
+        paperLongSide: 'Long side',
+        paperShortSide: 'Short side',
+        trimBleedSection: 'Trim size and bleed (mm)',
+        trimPreset: 'Trim preset',
+        trimHeight: 'Height',
+        trimWidth: 'Width',
+        bleed: 'Bleed',
+        marginSection: 'Margin settings (mm)',
+        gripperMargin: 'Gripper margin',
+        tailMargin: 'Tail margin',
+        sideMargin: 'Side margin',
+        centerMargin: 'Center margin',
+        on: 'On',
+        orientationTitle: 'Placement / grain',
+        afterCut: 'after cut',
+        portraitPlacement: 'Portrait placement',
+        landscapePlacement: 'Landscape placement',
+        numberUp: 'Number-up',
+        trimSize: 'Trim size',
+        paperSize: 'Paper size',
+        savePngTitle: 'Save preview as PNG',
+        savePng: 'Save as PNG',
+        license: 'License',
+        thirdPartyLicenses: 'Third-party licenses',
+        emptyLayoutMessage: 'Cannot impose with current settings',
+        pngPaperSize: 'Paper size',
+        pngFinishedTrimSize: 'Finished trim size',
+        pngNumberUp: 'Number-up',
+        pngGripper: 'Gripper',
+        pngTail: 'Tail',
+        pngSideGap: 'Side gap',
+        pngCenterGap: 'Center gap',
+      },
+    };
+
+    const BASE_LABELS = {
+      en: {
+        shiroku: 'Shiroku-ban',
+        a_hon: 'A-series parent sheet',
+        b_hon: 'B-series parent sheet',
+        kiku: 'Kiku-ban',
+        hatron: 'Hatron-ban',
+        jis_a: 'JIS A series',
+        jis_b: 'JIS B series',
+      },
+    };
+
+    const CUT_LABELS = {
+      en: {
+        bai: 'Double-size sheet',
+        zen: 'Full sheet',
+        han: 'Half sheet',
+        cut4: 'Quarter sheet',
+        cut8: 'Eighth sheet',
+        naga8: '1/8 sheet, long cut',
+        naga2: 'Half sheet, long cut',
+        cut3: 'Third sheet',
+        naga3: '1/3 sheet, long cut',
+        kaku6: '1/6 sheet, square cut',
+        naga6: '1/6 sheet, long cut',
+        a2: 'A2',
+        nobi3: 'A3 oversize',
+        a3: 'A3',
+        nobi4: 'A4 oversize',
+        a4: 'A4',
+        a5: 'A5',
+        b2: 'B2',
+        b3: 'B3',
+        b4: 'B4',
+        b5: 'B5',
+      },
+    };
+
+    const TRIM_PRESET_LABELS = {
+      en: {
+        card: 'Business card (JP standard)',
+      },
+    };
+
+    function getInitialLanguage() {
+      try {
+        return localStorage.getItem(LANGUAGE_STORAGE_KEY) === 'en' ? 'en' : 'ja';
+      } catch (_) {
+        return 'ja';
+      }
+    }
+
+    function getBaseLabel(base, language) {
+      return BASE_LABELS[language]?.[base.name_key] || base.name_label;
+    }
+
+    function getCutLabel(cut, language) {
+      return CUT_LABELS[language]?.[cut.cut_key] || cut.cut_label;
+    }
+
+    function getTrimPresetLabel(preset, language) {
+      return TRIM_PRESET_LABELS[language]?.[preset.key] || preset.label;
+    }
+
+    function getGrainLabel(language, grain) {
+      if (language === 'en') return grain === 'T' ? 'Grain Long' : 'Grain Short';
+      return grain === 'T' ? 'T目' : 'Y目';
+    }
+
+    function getParentGrainLabel(language, grain) {
+      if (language === 'en') return getGrainLabel(language, grain);
+      return grain === 'T' ? '全判T目' : '全判Y目';
+    }
+
+    function formatNumberUp(language, total) {
+      return language === 'en' ? `${total}-up` : `${total} 面`;
+    }
+
+    function formatLeftRight(language, leftTotal, rightTotal) {
+      return language === 'en'
+        ? `Left: ${leftTotal} + Right: ${rightTotal}`
+        : `左:${leftTotal} + 右:${rightTotal}`;
+    }
+
+    function formatMmDimension(language, w, h, unit = 'mm') {
+      const suffix = language === 'en' ? ` ${unit}` : unit;
+      return `${w.toFixed(1)}×${h.toFixed(1)}${suffix}`;
+    }
+
     // 入力欄が編集可能か判定
     function isEditableField(el) {
       if (!el || el.disabled || el.readOnly) return false;
@@ -208,14 +382,14 @@ function drawPaperGrain(ctx, paperW, paperH, mode) {
   ctx.restore();
 }
 
-function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
+function drawEmptyLayoutMessage(ctx, paperW, paperH, positions, message = '面付けできません') {
   if (positions.length > 0) return;
   ctx.save();
   ctx.fillStyle = "rgba(15, 23, 42, 0.72)";
   ctx.font = "600 8px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("面付けできません", paperW / 2, paperH / 2);
+  ctx.fillText(message, paperW / 2, paperH / 2);
   ctx.restore();
 }
 
@@ -823,10 +997,41 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
     }
 
     // --- React Components --------------------------------------------------------
-    function NumericField({ value, onChange, min = 0, step = 1, disabled = false, className, ...props }) {
+    function fractionDigitsForStep(raw) {
+      const text = String(raw ?? '').trim();
+      const match = text.match(/^[+-]?(?:\d+|\d*\.\d*|\.\d*)$/);
+      if (!match) return 0;
+      const decimal = text.split('.')[1];
+      return decimal ? Math.min(decimal.length, 12) : 0;
+    }
+
+    function stepDraftValue({ raw, value, min, direction }) {
+      const parsed = Number(raw);
+      const fallback = Number.isFinite(value) ? value : min;
+      const current = Number.isFinite(parsed) ? parsed : fallback;
+      const digits = fractionDigitsForStep(raw);
+      const scale = 10 ** digits;
+      const base = Math.round(current * scale);
+      const next = Math.max(min, (base + direction) / scale);
+      const normalized = Object.is(next, -0) ? 0 : next;
+      return {
+        draft: digits > 0 ? normalized.toFixed(digits) : String(normalized),
+        value: normalized,
+      };
+    }
+
+    function NumericField({ value, onChange, min = 0, step = 1, disabled = false, className, onKeyDown, ...props }) {
       const [draft, setDraft] = useState(() => (Number.isFinite(value) ? String(value) : ''));
+      const pendingDraftRef = useRef(null);
 
       useEffect(() => {
+        const pending = pendingDraftRef.current;
+        if (pending && Object.is(pending.value, value)) {
+          pendingDraftRef.current = null;
+          setDraft(pending.draft);
+          return;
+        }
+        pendingDraftRef.current = null;
         setDraft(Number.isFinite(value) ? String(value) : '');
       }, [value]);
 
@@ -844,6 +1049,19 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
         onChange(next);
       };
 
+      const handleKeyDown = (e) => {
+        if (onKeyDown) onKeyDown(e);
+        if (e.defaultPrevented || disabled) return;
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+        e.preventDefault();
+        const direction = e.key === 'ArrowUp' ? 1 : -1;
+        const next = stepDraftValue({ raw: draft, value, min, direction });
+        pendingDraftRef.current = next;
+        setDraft(next.draft);
+        onChange(next.value);
+      };
+
       return (
         <input
           type="text"
@@ -855,6 +1073,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
             commit(e.target.value);
           }}
           onBlur={normalize}
+          onKeyDown={handleKeyDown}
           onFocus={(e) => selectInputValue(e.currentTarget)}
           onMouseUp={(e) => {
             e.preventDefault();
@@ -890,7 +1109,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
       );
     }
 
-    function LayoutStats({ layout, paperW, paperH }) {
+    function LayoutStats({ layout, paperW, paperH, language, t }) {
       const { trimW, trimH, leftCols, leftRows, rightCols, rightRows, positions } = layout;
       const total = positions.length;
       const leftTotal = leftCols * leftRows;
@@ -899,20 +1118,20 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
         <div className="rounded-lg bg-blue-50 p-4">
           <div className="grid grid-cols-3 gap-6 text-sm">
             <div>
-              <div className="text-gray-600">面付け数</div>
-              <div className="font-semibold text-lg">{total} 面</div>
+              <div className="text-gray-600">{t.numberUp}</div>
+              <div className="font-semibold text-lg">{formatNumberUp(language, total)}</div>
               {rightTotal > 0 ? (
-                <div className="text-gray-500">左:{leftTotal} + 右:{rightTotal}</div>
+                <div className="text-gray-500">{formatLeftRight(language, leftTotal, rightTotal)}</div>
               ) : (
                 <div className="text-gray-500">{leftCols} × {leftRows}</div>
               )}
             </div>
             <div>
-              <div className="text-gray-600">製品サイズ</div>
+              <div className="text-gray-600">{t.trimSize}</div>
               <div className="font-semibold">{trimW.toFixed(1)} × {trimH.toFixed(1)} mm</div>
             </div>
             <div>
-              <div className="text-gray-600">用紙サイズ</div>
+              <div className="text-gray-600">{t.paperSize}</div>
               <div className="font-semibold">{paperW.toFixed(1)} × {paperH.toFixed(1)} mm</div>
             </div>
           </div>
@@ -921,6 +1140,8 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
     }
 
     function App() {
+      const [language, setLanguage] = useState(getInitialLanguage);
+      const t = TEXT[language];
       // 状態管理 - 用紙は常に横置き
       // フルスクリーンプレビュー状態
       const [isFullscreen, setIsFullscreen] = useState(false);
@@ -945,6 +1166,18 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
       const [selectedBaseKey, setSelectedBaseKey] = useState('');
       const [selectedCutKey, setSelectedCutKey] = useState('');
 
+      const changeLanguage = (nextLanguage) => {
+        setLanguage(nextLanguage);
+        try {
+          localStorage.setItem(LANGUAGE_STORAGE_KEY, nextLanguage);
+        } catch (_) {}
+      };
+
+      useEffect(() => {
+        document.documentElement.lang = language;
+        document.title = t.appTitle;
+      }, [language, t.appTitle]);
+
       // 初回ロード
       useEffect(() => {
         const data = loadPresetData();
@@ -954,9 +1187,15 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
       }, []);
 
       // ベース／断裁の候補と選択
-      const baseOptions = useMemo(() => bases.map(b => ({ key: b.name_key, label: b.name_label })), [bases]);
+      const baseOptions = useMemo(
+        () => bases.map(b => ({ key: b.name_key, label: getBaseLabel(b, language) })),
+        [bases, language]
+      );
       const currentBase = useMemo(() => bases.find(b => b.name_key === selectedBaseKey) || null, [bases, selectedBaseKey]);
-      const cutOptions = useMemo(() => (currentBase?.cuts || []).map(c => ({ key: c.cut_key, label: c.cut_label })), [currentBase]);
+      const cutOptions = useMemo(
+        () => (currentBase?.cuts || []).map(c => ({ key: c.cut_key, label: getCutLabel(c, language) })),
+        [currentBase, language]
+      );
       const currentCut = useMemo(() => (currentBase?.cuts || []).find(c => c.cut_key === selectedCutKey) || null, [currentBase, selectedCutKey]);
 
       // 初期選択（データ到着→デフォルトベース優先で選択、ベース変更→デフォルトカット優先で選択）
@@ -1150,7 +1389,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
           if (typeof drawRegistrationMarks === 'function') {
             drawRegistrationMarks(ctx, layout);
           }
-          drawEmptyLayoutMessage(ctx, paperW, paperH, layout.positions);
+          drawEmptyLayoutMessage(ctx, paperW, paperH, layout.positions, t.emptyLayoutMessage);
 
           ctx.restore();
 
@@ -1167,21 +1406,33 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
           ctx.lineTo(targetWidthPx, targetHeightPx + 0.5);
           ctx.stroke();
           // テキスト（左右中央揃え・プリセット名対応）
-          const grainLabel = (grain === 'T') ? 'T目' : 'Y目'; // 全判での目（flip適用前）
-          const paperLabel = (!customMode && currentBase && currentCut)
-            ? `${currentBase.name_label} ${currentCut.cut_label}（${grainLabel} ${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ）`
-            : `${paperH.toFixed(1)}×${paperW.toFixed(1)}ミリ`;
-          const paperText = `紙サイズ: ${paperLabel}`;
-          const trimText  = `製品仕上がりサイズ: ${layout.trimW.toFixed(1)}×${layout.trimH.toFixed(1)}ミリ　裁ち落とし: ${safeBleedEachSide.toFixed(1)}mm`;
-          const countText = `面付け数: ${layout.positions.length}面`;
-          const gripText = `咥え: ${layout.margins.gripMargin.toFixed(1)}mm`;
-          const tailText = `咥え尻: ${layout.margins.tailMargin.toFixed(1)}mm`;
-          const gripTailText = `${gripText}、${tailText}`;
-          const lrText = `左右アキ: ${layout.margins.leftRightMargin.toFixed(1)}mm`;
-          const centerText = layout.margins.centerMargin > 0 ? `中央アキ: ${layout.margins.centerMargin.toFixed(1)}mm` : null;
+          const grainLabel = getGrainLabel(language, grain); // 全判での目（flip適用前）
+          const dimensionUnit = language === 'en' ? 'mm' : 'ミリ';
+          const paperDimension = formatMmDimension(language, paperH, paperW, dimensionUnit);
+          const trimDimension = formatMmDimension(language, layout.trimW, layout.trimH, dimensionUnit);
+          const paperPresetLabel = (!customMode && currentBase && currentCut)
+            ? `${getBaseLabel(currentBase, language)} ${getCutLabel(currentCut, language)}`
+            : null;
+          const paperLabel = paperPresetLabel
+            ? language === 'en'
+              ? `${paperPresetLabel} (${grainLabel} ${paperDimension})`
+              : `${paperPresetLabel}（${grainLabel} ${paperDimension}）`
+            : paperDimension;
+          const paperText = `${t.pngPaperSize}: ${paperLabel}`;
+          const valueMm = (n) => language === 'en' ? `${n.toFixed(1)} mm` : `${n.toFixed(1)}mm`;
+          const bleedText = language === 'en' ? `${safeBleedEachSide.toFixed(1)} mm` : `${safeBleedEachSide.toFixed(1)}mm`;
+          const trimText = language === 'en'
+            ? `${t.pngFinishedTrimSize}: ${trimDimension}, ${t.bleed}: ${bleedText}`
+            : `${t.pngFinishedTrimSize}: ${trimDimension}　${t.bleed}: ${bleedText}`;
+          const countText = `${t.pngNumberUp}: ${formatNumberUp(language, layout.positions.length)}`;
+          const gripText = `${t.pngGripper}: ${valueMm(layout.margins.gripMargin)}`;
+          const tailText = `${t.pngTail}: ${valueMm(layout.margins.tailMargin)}`;
+          const gripTailText = `${gripText}${language === 'en' ? ', ' : '、'}${tailText}`;
+          const lrText = `${t.pngSideGap}: ${valueMm(layout.margins.leftRightMargin)}`;
+          const centerText = layout.margins.centerMargin > 0 ? `${t.pngCenterGap}: ${valueMm(layout.margins.centerMargin)}` : null;
           const parts = [paperText, trimText, countText, gripTailText, lrText];
           if (centerText) parts.push(centerText);
-          const infoLine = parts.join('　　'); // 全角スペース区切り
+          const infoLine = parts.join(language === 'en' ? '  |  ' : '　　');
 
           ctx.fillStyle = '#111827';
           ctx.font = '14px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
@@ -1358,7 +1609,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
             if (typeof drawRegistrationMarks === 'function') {
               drawRegistrationMarks(ctx, layout);
             }
-            drawEmptyLayoutMessage(ctx, paperW, paperH, layout.positions);
+            drawEmptyLayoutMessage(ctx, paperW, paperH, layout.positions, t.emptyLayoutMessage);
 
             ctx.restore();
           } catch (e) {
@@ -1409,7 +1660,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
           resizeObserver.disconnect();
           if (isFullscreen) window.removeEventListener("resize", handleWindowResize);
         };
-      }, [layout, paperW, paperH, pxPerMm, safeGripMargin, safeTailMargin, safeLeftRightMargin, leftRightMarginEnabled, safeCenterMargin, centerMarginEnabled, effectiveGrain, isFullscreen, fitToArea, fitScale]);
+      }, [layout, paperW, paperH, pxPerMm, safeGripMargin, safeTailMargin, safeLeftRightMargin, leftRightMarginEnabled, safeCenterMargin, centerMarginEnabled, effectiveGrain, isFullscreen, fitToArea, fitScale, t.emptyLayoutMessage]);
 
 
 
@@ -1423,18 +1674,38 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
       return (
         <div className="min-h-screen bg-white p-4">
           <div className="mx-auto max-w-7xl p-3 space-y-6">
+            <div className="flex justify-end">
+              <div className="inline-flex rounded-md border border-slate-300 bg-white p-0.5 text-xs font-medium" role="group" aria-label={t.languageLabel}>
+                <button
+                  type="button"
+                  className={`rounded px-2 py-1 transition-colors ${language === 'ja' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                  aria-pressed={language === 'ja'}
+                  onClick={() => changeLanguage('ja')}
+                >
+                  日本語
+                </button>
+                <button
+                  type="button"
+                  className={`rounded px-2 py-1 transition-colors ${language === 'en' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                  aria-pressed={language === 'en'}
+                  onClick={() => changeLanguage('en')}
+                >
+                  English
+                </button>
+              </div>
+            </div>
 
             <div className="space-y-4">
               <div className="grid gap-4 min-[1000px]:grid-cols-2">
               {/* プリセット選択と用紙サイズ */}
               <section aria-labelledby="paper-size-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
-                <h2 id="paper-size-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">用紙サイズ（mm）</h2>
+                <h2 id="paper-size-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">{t.paperSizeSection}</h2>
                 <div className="space-y-2">
                   {/* 1行目：判型／断裁セレクト＋カスタム */}
                   <div className="flex flex-nowrap items-end gap-2">
                     <div className="flex-[3_1_0%] min-w-0 opacity-100">
                       <label className="block">
-                        <span className="block text-xs text-gray-600 mb-1">判型</span>
+                        <span className="block text-xs text-gray-600 mb-1">{t.parentSheet}</span>
                         <select
                           className={`w-full rounded-lg border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${customMode ? 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300'}`}
                           value={selectedBaseKey}
@@ -1450,7 +1721,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                     </div>
                     <div className="flex-[2_1_0%] min-w-0">
                       <label className="block">
-                        <span className="block text-xs text-gray-600 mb-1">断裁</span>
+                        <span className="block text-xs text-gray-600 mb-1">{t.cutSize}</span>
                         <select
                           className={`w-full rounded-lg border px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${customMode ? 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300'}`}
                           value={selectedCutKey}
@@ -1458,8 +1729,8 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                           disabled={customMode}
                           aria-disabled={customMode}
                         >
-                          {(currentBase?.cuts || []).map((c) => (
-                            <option key={c.cut_key} value={c.cut_key}>{c.cut_label}</option>
+                          {cutOptions.map((c) => (
+                            <option key={c.key} value={c.key}>{c.label}</option>
                           ))}
                         </select>
                       </label>
@@ -1474,7 +1745,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         checked={customMode}
                         onChange={(e) => setCustomMode(e.target.checked)}
-                        aria-label="カスタム切替"
+                        aria-label={t.toggleCustomSize}
                       />
                       <span
                         className={`mt-1 inline-block w-2 h-2 rounded-full ${customMode ? 'bg-blue-600' : 'bg-gray-300'}`}
@@ -1482,8 +1753,8 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                       ></span>
                     </div>
                     <div className="grid grid-cols-2 gap-2 flex-1">
-                      <NumberInput label="タテ" value={paperLong} onChange={setPaperLong} min={1} step={0.5} disabled={!customMode} />
-                      <NumberInput label="ヨコ" value={paperShort} onChange={setPaperShort} min={1} step={0.5} disabled={!customMode} />
+                      <NumberInput label={t.paperLongSide} value={paperLong} onChange={setPaperLong} min={1} step={0.5} disabled={!customMode} />
+                      <NumberInput label={t.paperShortSide} value={paperShort} onChange={setPaperShort} min={1} step={0.5} disabled={!customMode} />
                     </div>
                   </div>
                 </div>
@@ -1491,10 +1762,10 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
 
               {/* 仕上がりサイズと裁ち落とし */}
               <section aria-labelledby="trim-bleed-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
-                <h2 id="trim-bleed-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">仕上がりサイズ・裁ち落とし（mm）</h2>
+                <h2 id="trim-bleed-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">{t.trimBleedSection}</h2>
                 <div className="mb-3">
                   <label className="block">
-                    <span className="block text-xs text-gray-600 mb-1">仕上がりプリセット</span>
+                    <span className="block text-xs text-gray-600 mb-1">{t.trimPreset}</span>
                     <select
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                       value={selectedTrimPresetKey}
@@ -1502,16 +1773,16 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                     >
                       {trimPresets.map((p) => (
                         <option key={p.key} value={p.key}>
-                          {p.label}
+                          {getTrimPresetLabel(p, language)}
                         </option>
                       ))}
                     </select>
                   </label>
                 </div>
                 <div className="grid grid-cols-3 gap-4">
-                  <NumberInput label="タテ" value={prodTrimW} onChange={setProdTrimW} min={1} step={0.5} />
-                  <NumberInput label="ヨコ" value={prodTrimH} onChange={setProdTrimH} min={1} step={0.5} />
-                  <NumberInput label="裁ち落とし" value={bleedEachSide} onChange={setBleedEachSide} min={0} step={1} />
+                  <NumberInput label={t.trimHeight} value={prodTrimW} onChange={setProdTrimW} min={1} step={0.5} />
+                  <NumberInput label={t.trimWidth} value={prodTrimH} onChange={setProdTrimH} min={1} step={0.5} />
+                  <NumberInput label={t.bleed} value={bleedEachSide} onChange={setBleedEachSide} min={0} step={1} />
                 </div>
               </section>
               </div>
@@ -1519,17 +1790,17 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
 
               {/* マージン設定 */}
               <section aria-labelledby="margin-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
-                <h2 id="margin-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">マージン設定（mm）</h2>
+                <h2 id="margin-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">{t.marginSection}</h2>
                 <div className="grid gap-4 grid-cols-2 min-[500px]:grid-cols-4">
                   <div className="min-w-0">
-                    <NumberInput label="咥え" value={gripMargin} onChange={setGripMargin} min={0} step={0.5} />
+                    <NumberInput label={t.gripperMargin} value={gripMargin} onChange={setGripMargin} min={0} step={0.5} />
                   </div>
                   <div className="min-w-0">
-                    <NumberInput label="咥え尻" value={tailMargin} onChange={setTailMargin} min={0} step={0.5} />
+                    <NumberInput label={t.tailMargin} value={tailMargin} onChange={setTailMargin} min={0} step={0.5} />
                   </div>
                   <div className="min-w-0">
                     <label className="block">
-                      <span className="block text-xs text-gray-600 mb-1">左右マージン</span>
+                      <span className="block text-xs text-gray-600 mb-1">{t.sideMargin}</span>
                       <div className="grid grid-cols-[auto_auto_1fr] items-center gap-2 min-w-0">
                         <input
                           type="checkbox"
@@ -1537,7 +1808,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                           onChange={(e) => setLeftRightMarginEnabled(e.target.checked)}
                           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
-                        <span className="text-xs text-gray-600">あり</span>
+                        <span className="text-xs text-gray-600">{t.on}</span>
                         <div className="min-w-0">
                           <NumericField
                             className="w-full min-w-0 rounded-lg border-gray-300 border px-3 py-2 text-sm tabular-nums text-right focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
@@ -1553,7 +1824,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                   </div>
                   <div className="min-w-0">
                     <label className="block">
-                      <span className="block text-xs text-gray-600 mb-1">中央マージン</span>
+                      <span className="block text-xs text-gray-600 mb-1">{t.centerMargin}</span>
                       <div className="grid grid-cols-[auto_auto_1fr] items-center gap-2 min-w-0">
                         <input
                           type="checkbox"
@@ -1561,7 +1832,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                           onChange={(e) => setCenterMarginEnabled(e.target.checked)}
                           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
-                        <span className="text-xs text-gray-600">あり</span>
+                        <span className="text-xs text-gray-600">{t.on}</span>
                         <div className="min-w-0">
                           <NumericField
                             className="w-full min-w-0 rounded-lg border-gray-300 border px-3 py-2 text-sm tabular-nums text-right focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
@@ -1579,9 +1850,9 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
 
               {/* 配置方向 / 紙の目 */}
               <section aria-labelledby="orientation-title" className="group relative rounded-xl ring-1 ring-slate-200 bg-slate-50/40 p-3 pt-5 hover:ring-slate-300 focus-within:ring-blue-300 transition-colors">
-                <h2 id="orientation-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">配置方向 / 紙の目（断裁後の目：{effectiveGrain === "T" ? "T目" : "Y目"}）</h2>
-                <div className="flex flex-nowrap items-center gap-2">
-                  <div className="flex flex-nowrap gap-2">
+                <h2 id="orientation-title" className="absolute -top-3 left-3 bg-slate-50/40 px-2 text-sm font-medium text-gray-700 rounded">{t.orientationTitle} ({t.afterCut}: {getGrainLabel(language, effectiveGrain)})</h2>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <button
                       className={`px-2 sm:px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
                         placeOrientation === "portrait"
@@ -1590,7 +1861,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                       }`}
                       onClick={() => setPlaceOrientation("portrait")}
                     >
-                      縦置き
+                      {t.portraitPlacement}
                     </button>
                     <button
                       className={`px-2 sm:px-3 py-2 rounded-lg border font-medium text-sm transition-colors ${
@@ -1600,11 +1871,11 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                       }`}
                       onClick={() => setPlaceOrientation("landscape")}
                     >
-                      横置き
+                      {t.landscapePlacement}
                     </button>
                   </div>
                   <div className="w-px h-6 bg-gray-300" aria-hidden="true"></div>
-                  <div className="flex flex-nowrap gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <button
                       className={`px-1.5 sm:px-2 py-2 rounded-lg border font-medium text-sm transition-colors ${
                         grain === "T"
@@ -1613,7 +1884,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                       }`}
                       onClick={() => setGrain("T")}
                     >
-                      全判T目
+                      {getParentGrainLabel(language, 'T')}
                     </button>
                     <button
                       className={`px-1.5 sm:px-2 py-2 rounded-lg border font-medium text-sm transition-colors ${
@@ -1623,7 +1894,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                       }`}
                       onClick={() => setGrain("Y")}
                     >
-                      全判Y目
+                      {getParentGrainLabel(language, 'Y')}
                     </button>
                   </div>
                 </div>
@@ -1633,7 +1904,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
             </div>
 
             {/* レイアウト結果 */}
-            <LayoutStats layout={layout} paperW={paperW} paperH={paperH} />
+            <LayoutStats layout={layout} paperW={paperW} paperH={paperH} language={language} t={t} />
 
             {/* プレビューエリア */}
             {/* Fullscreen overlay */}
@@ -1666,9 +1937,9 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                 type="button"
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 active:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 onClick={(e) => { e.stopPropagation(); handleSavePNG(3000); }}
-                title="プレビューをPNGで保存"
+                title={t.savePngTitle}
               >
-                画像として保存
+                {t.savePng}
               </button>
             </div>
             <footer className="border-t border-slate-200 pt-4 text-xs text-slate-500">
@@ -1680,7 +1951,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                   target="_blank"
                   rel="noreferrer"
                 >
-                  ライセンス
+                  {t.license}
                 </a>
                 <a
                   className="text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline"
@@ -1688,7 +1959,7 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions) {
                   target="_blank"
                   rel="noreferrer"
                 >
-                  依存ライセンス
+                  {t.thirdPartyLicenses}
                 </a>
                 <a
                   className="text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline"
