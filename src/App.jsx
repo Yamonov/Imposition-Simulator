@@ -1151,8 +1151,8 @@ function drawEmptyLayoutMessage(ctx, paperW, paperH, positions, message = '面�
       // 仕上がりサイズプリセット
       const [selectedTrimPresetKey, setSelectedTrimPresetKey] = useState('a4');
       const [trimPresets, setTrimPresets] = useState([]);
-      const [paperLong, setPaperLong] = useState(936);  // 長辺（菊全判デフォルト）
-      const [paperShort, setPaperShort] = useState(632); // 短辺（菊全判デフォルト）
+      const [paperLong, setPaperLong] = useState(939);  // 長辺（菊全判デフォルト）
+      const [paperShort, setPaperShort] = useState(636); // 短辺（菊全判デフォルト）
       const [prodTrimW, setProdTrimW] = useState(297);
       const [prodTrimH, setProdTrimH] = useState(210);
       const [bleedEachSide, setBleedEachSide] = useState(3);
